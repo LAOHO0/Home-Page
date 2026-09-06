@@ -36,7 +36,7 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
   const app = express();
   app.disable('x-powered-by');
   if (trustProxy) app.set('trust proxy', trustProxy.split(',').map(x => x.trim()));
-  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'https:', 'http:', 'data:', 'blob:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'self'"], frameSrc: ["'self'"], upgradeInsecureRequests: null } }, crossOriginResourcePolicy: { policy: 'same-origin' } }));
+  app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'https:', 'http:', 'data:', 'blob:'], connectSrc: ["'self'", 'https:', 'http:'], objectSrc: ["'none'"], frameAncestors: ["'self'"], frameSrc: ["'self'"], upgradeInsecureRequests: null } }, crossOriginResourcePolicy: { policy: 'same-origin' } }));
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -126,7 +126,7 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
   });
   app.post('/api/admin/import', express.json({ limit: '40mb' }), async (req, res) => {
     const revision = revisionSchema.parse(req.body?.revision);
-    const backup = z.object({ format: z.literal('navigation-backup'), version: z.literal(1), exportedAt: z.string(), document: documentSchema, assets: z.record(z.string().regex(uploadPath), z.string().max(7_000_000)).refine(x => Object.keys(x).length <= 2013, '图片数量过多') }).strict().parse(req.body?.backup);
+    const backup = z.object({ format: z.literal('navigation-backup'), version: z.literal(1), exportedAt: z.string(), document: documentSchema, assets: z.record(z.string().regex(uploadPath), z.string().max(7_000_000)).refine(x => Object.keys(x).length <= 2016, '图片数量过多') }).strict().parse(req.body?.backup);
     if (Buffer.byteLength(JSON.stringify(backup)) > backupByteLimit) throw failure('备份不能超过 35 MB。');
     const references = imageReferences(backup.document);
     const files = [], replacements = new Map();

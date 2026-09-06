@@ -1,8 +1,15 @@
-export const themeNames = { classic: '经典 · 圆润旧版', sky: '晴空 · 轻盈白', graphite: '终端 · 石墨黑', forest: '山岚 · 自然绿' };
+export const themeNames = { classic: '经典 · 圆润旧版', sky: '晴空 · 轻盈白', graphite: '终端 · 石墨黑', forest: '山岚 · 自然绿', porcelain: '月白 · 极简' };
 export const backupByteLimit = 35 * 1024 * 1024;
 const layout = (extra = {}) => ({ maxWidth: 1280, pageGutter: 40, panelRadius: 0, panelGap: 0, overviewPadding: 38, resourcesPadding: 32, overviewGap: 60, gridGap: 14, cardPadding: 22, cardMinWidth: 240, panelShadow: 0, cardLift: 0, borderMode: 'subtle', overviewLayout: 'split', resourceView: 'grid', ...extra });
 const background = (color, text, extra = {}) => ({ mode: 'solid', color, text, gradientTo: color, angle: 135, image: '', position: 'center', size: 'cover', overlay: '#000000', opacity: 0, ...extra });
 export const themeDefaults = {
+  porcelain: {
+    style: 'porcelain',
+    page: background('#f6f6f4', '#17171a'),
+    overview: background('#ffffff', '#17171a'), resources: background('#ffffff', '#17171a'),
+    card: { color: '#ffffff', text: '#17171a', opacity: 100, radius: 8 },
+    layout: layout({ maxWidth: 1320, pageGutter: 32, panelRadius: 10, panelGap: 20, overviewPadding: 40, resourcesPadding: 32, overviewGap: 48, gridGap: 12, cardPadding: 18, cardMinWidth: 230, panelShadow: 4, cardLift: 2, borderMode: 'subtle', overviewLayout: 'split', resourceView: 'grid' }),
+  },
   classic: {
     style: 'classic',
     page: background('#1c1c1e', '#f7fafc', { mode: 'gradient', gradientTo: '#303238', angle: 145 }),
@@ -39,6 +46,7 @@ export const layoutPresets = {
 
 function record(value) { return value && typeof value === 'object' && !Array.isArray(value); }
 function normalizeAppearance(base, value) {
+  if (value === undefined) return structuredClone(base);
   if (!record(value)) return value;
   return {
     ...value,
@@ -50,7 +58,7 @@ export function normalizeDocument(value) {
   if (!record(value) || !record(value.settings) || !record(value.settings.appearances)) return value;
   const next = structuredClone(value);
   // Earlier backups have three color themes and no layout fields.
-  if (next.settings.appearances.classic === undefined) next.settings.appearances.classic = structuredClone(themeDefaults.classic);
+  for (const name of ['classic', 'porcelain']) if (next.settings.appearances[name] === undefined) next.settings.appearances[name] = structuredClone(themeDefaults[name]);
   for (const [name, base] of Object.entries(themeDefaults)) next.settings.appearances[name] = normalizeAppearance(base, next.settings.appearances[name]);
   return next;
 }

@@ -57,12 +57,37 @@ export function resourceIcon(entry) {
   img.src = entry.icon || (bundled[host] ? `/assets/${bundled[host]}.png` : `https://favicon.im/${encodeURIComponent(host)}`);
   return box;
 }
-export function makeResourceCard(entry) {
+let resourceStatusObserver;
+const checkedResourceStatuses = new WeakSet();
+function checkResourceStatus(card) {
+  if (checkedResourceStatuses.has(card)) return;
+  checkedResourceStatuses.add(card);
+  const status = card.querySelector('.resource-status');
+  if (!status) return;
+  let target;
+  try { target = new URL(card.href); } catch { status.className = 'resource-status is-unknown'; status.title = '网址无效'; return; }
+  if (location.protocol === 'https:' && target.protocol === 'http:') { status.className = 'resource-status is-unknown'; status.title = '混合内容限制，未检测'; return; }
+  const controller = new AbortController();
+  const timer = setTimeout(() => { controller.abort(); status.className = 'resource-status is-off'; status.title = '超时或暂不可达'; }, 6000);
+  fetch(target.href, { mode: 'no-cors', cache: 'no-store', signal: controller.signal })
+    .then(() => { status.className = 'resource-status is-on'; status.title = '在线'; })
+    .catch(() => { status.className = 'resource-status is-off'; status.title = '超时或暂不可达'; })
+    .finally(() => clearTimeout(timer));
+}
+export function observeResourceStatuses(root) {
+  const cards = [...root.querySelectorAll('.resource-status')].map(status => status.closest('.resource-card')).filter(Boolean);
+  if (!cards.length) return;
+  if (!resourceStatusObserver && 'IntersectionObserver' in window) resourceStatusObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { resourceStatusObserver.unobserve(entry.target); checkResourceStatus(entry.target); } }), { rootMargin: '160px' });
+  cards.forEach(card => resourceStatusObserver ? resourceStatusObserver.observe(card) : checkResourceStatus(card));
+}
+export function makeResourceCard(entry, { withStatus = false } = {}) {
   const link = document.createElement('a'); link.className = 'resource-card'; link.href = entry.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
   const copy = document.createElement('span'); copy.className = 'resource-copy';
   const name = textElement('b', entry.name); name.title = entry.name;
   copy.append(name, textElement('span', entry.description, 'resource-description'));
-  link.append(resourceIcon(entry), copy, icon('arrow-up-right')); return link;
+  link.append(resourceIcon(entry), copy);
+  if (withStatus) { const status = textElement('span', '', 'resource-status is-checking'); status.title = '正在检测在线状态'; status.setAttribute('aria-label', status.title); link.append(status); }
+  link.append(icon('arrow-up-right')); return link;
 }
 export function showToast(message, error = false) {
   const dialog = [...document.querySelectorAll('dialog[open]')].at(-1);

@@ -22,11 +22,22 @@ test('legacy themes migrate without losing customization and invalid layouts are
   assert.equal(migrated.settings.appearances.classic.layout.panelRadius, 28);
   assert.equal(migrated.settings.appearances.graphite.layout.resourceView, 'list');
   assert.equal(migrated.settings.appearances.forest.layout.overviewLayout, 'stacked');
+  assert.equal(migrated.settings.appearances.porcelain.style, 'porcelain');
+  assert.equal(migrated.settings.appearances.porcelain.card.radius, 8);
   assert.equal(legacy.settings.appearances.classic, undefined);
   migrated.settings.appearances.sky.layout.panelRadius = 32;
   assert.deepEqual(documentSchema.parse(migrated), migrated);
   migrated.settings.appearances.sky.layout.panelRadius = 999;
   assert.equal(documentSchema.safeParse(migrated).success, false);
+});
+
+test('documents from before the porcelain theme receive the new theme defaults', () => {
+  const legacy = createDefaultDocument();
+  delete legacy.settings.appearances.porcelain;
+  const parsed = documentSchema.parse(legacy);
+  assert.equal(parsed.settings.appearances.porcelain.style, 'porcelain');
+  assert.equal(parsed.settings.appearances.porcelain.layout.panelRadius, 10);
+  assert.equal(parsed.settings.appearances.porcelain.card.color, '#ffffff');
 });
 
 test('administrator workflows persist safely and backups include images', async t => {

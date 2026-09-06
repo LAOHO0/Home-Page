@@ -18,11 +18,11 @@ const layout = z.object({
   panelShadow: z.number().int().min(0).max(40), cardLift: z.number().int().min(0).max(8),
   borderMode: z.enum(['none', 'subtle', 'defined']), overviewLayout: z.enum(['split', 'stacked']), resourceView: z.enum(['grid', 'list']),
 }).strict();
-const appearance = z.object({ style: z.enum(['classic', 'editorial', 'terminal', 'immersive']), page: layer, overview: layer, resources: layer, card: z.object({ color, text: color, opacity: z.number().min(0).max(100), radius: z.number().min(0).max(24) }).strict(), layout }).strict();
+const appearance = z.object({ style: z.enum(['classic', 'editorial', 'terminal', 'immersive', 'porcelain']), page: layer, overview: layer, resources: layer, card: z.object({ color, text: color, opacity: z.number().min(0).max(100), radius: z.number().min(0).max(24) }).strict(), layout }).strict();
 const taxonomy = z.object({ id, name: z.string().trim().min(1).max(40) }).strict();
 const documentShape = z.object({
   version: z.literal(1),
-  settings: z.object({ siteName: z.string().trim().min(1).max(60), logo: imageUrl, greeting: z.string().max(160), footer: z.string().max(300), defaultEngine: z.enum(['google', 'baidu', 'bing']), defaultCity: citySchema, theme: z.enum(['classic', 'sky', 'graphite', 'forest']), appearances: z.object({ classic: appearance, sky: appearance, graphite: appearance, forest: appearance }).strict() }).strict(),
+  settings: z.object({ siteName: z.string().trim().min(1).max(60), logo: imageUrl, greeting: z.string().max(160), footer: z.string().max(300), defaultEngine: z.enum(['google', 'baidu', 'bing']), defaultCity: citySchema, theme: z.enum(['classic', 'sky', 'graphite', 'forest', 'porcelain']), appearances: z.object({ classic: appearance, sky: appearance, graphite: appearance, forest: appearance, porcelain: appearance }).strict() }).strict(),
   categories: z.array(taxonomy).max(100), tags: z.array(taxonomy).max(200),
   entries: z.array(z.object({ id, type: z.enum(['apps', 'bookmarks']), name: z.string().trim().min(1).max(80), description: z.string().max(200), url: z.string().max(2000).refine(isWebUrl, '网址必须以 http:// 或 https:// 开头'), icon: imageUrl, categoryId: id.or(z.literal('')), tagIds: z.array(id).max(30) }).strict()).max(2000),
 }).strict().superRefine((doc, ctx) => {
