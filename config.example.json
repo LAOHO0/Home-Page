@@ -1,0 +1,67 @@
+{
+  "_comment": "这是配置文件示例，复制此文件为 config.json 并修改即可",
+  "pageTitle": "你的名字 - 个人主页",
+  "heading": {
+    "mainTitle": "Welcome",
+    "subTitle": "你好，我是 XXX"
+  },
+  "name": "your_username",
+  "displayName": "Your Name",
+  "bio": "Developer | Dreamer",
+  "url": "https://yourdomain.com",
+  "seo": {
+    "description": "你的个人主页描述",
+    "keywords": "关键词1, 关键词2, 关键词3",
+    "author": "your_username",
+    "twitter": "@your_twitter"
+  },
+  "github": {
+    "username": "your_github_username",
+    "showContributions": true
+  },
+  "socials": [
+    {
+      "name": "X (Twitter)",
+      "icon": "x",
+      "url": "https://x.com/your_username",
+      "enabled": true
+    },
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/your_username",
+      "enabled": true
+    },
+    {
+      "name": "Email",
+      "icon": "email",
+      "url": "mailto:your@email.com",
+      "enabled": true
+    },
+    {
+      "name": "Blog",
+      "icon": "blog",
+      "url": "https://yourblog.com",
+      "enabled": true
+    }
+  ],
+  "hitokoto": {
+    "enabled": true,
+    "customQuotes": [
+      {
+        "content": "Stay hungry, stay foolish.",
+        "author": "Steve Jobs"
+      }
+    ]
+  },
+  "site": {
+    "startDate": "2024-01-01"
+  },
+  "theme": {
+    "mode": "dark",
+    "primaryColor": "#6366f1",
+    "backgroundColor": "#0f0f0f",
+    "cardBackground": "#1a1a1a",
+    "textColor": "#ffffff"
+  }
+}

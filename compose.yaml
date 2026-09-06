@@ -1,0 +1,13 @@
+services:
+  navigation:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8766:8766"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD to at least 12 characters in .env}
+    volumes:
+      - navigation-data:/app/data
+volumes:
+  navigation-data:

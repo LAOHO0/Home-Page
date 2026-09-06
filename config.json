@@ -1,0 +1,12 @@
+{
+  "pageTitle": "我的导航",
+  "heading": { "mainTitle": "我的导航", "subTitle": "常用应用与收藏站点" },
+  "name": "我的导航",
+  "displayName": "欢迎回来",
+  "bio": "把常用的网站放在一起",
+  "url": "https://example.com",
+  "theme": { "mode": "dark", "primaryColor": "#0B84FF", "backgroundColor": "#1C1C1E", "cardBackground": "#2C2C2E" },
+  "socials": [],
+  "hitokoto": { "enabled": false },
+  "site": { "startDate": "2026-01-01" }
+}

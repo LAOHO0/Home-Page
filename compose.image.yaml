@@ -1,0 +1,14 @@
+services:
+  navigation:
+    image: ghcr.io/laoho0/home-page:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8766:8766"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD to at least 12 characters in .env}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    volumes:
+      - navigation-data:/app/data
+volumes:
+  navigation-data:
