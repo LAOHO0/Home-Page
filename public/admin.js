@@ -1,4 +1,4 @@
-import { $, icon, iconButton, installIcons, request, textElement, resourceIcon, busy, showToast, downloadJson, cityPicker } from './ui.js';
+import { $, icon, iconButton, installIcons, request, textElement, resourceIcon, busy, showToast, downloadJson, cityPicker, applyBrand } from './ui.js';
 import { backupByteLimit, filterEntries, createClientId, normalizeWebUrl } from './model.js';
 import { createAppearanceEditor } from './appearance.js';
 import { createBulkImportEditor } from './bulk-import.js';
@@ -19,7 +19,7 @@ async function save(value) {
 function updateCounts() {
   $('#apps-count').textContent = snapshot.document.entries.filter(x => x.type === 'apps').length;
   $('#bookmarks-count').textContent = snapshot.document.entries.filter(x => x.type === 'bookmarks').length;
-  $('#admin-brand').textContent = snapshot.document.settings.siteName;
+  applyBrand(snapshot.document.settings);
 }
 const appearance = createAppearanceEditor({ getSnapshot: () => snapshot, save, setDirty, upload });
 const bulkImport = createBulkImportEditor({ getSnapshot: () => snapshot, getType: () => page, save, fetchIcon, setDirty: value => { bulkDirty = value; },
@@ -65,6 +65,8 @@ async function checkAuth() {
   $('#auth-submit').textContent = setup ? '创建并登录' : '登录'; $('#auth-submit').disabled = setup && !status.setupAllowed;
   $('#password').minLength = setup ? 12 : 1; $('#password').autocomplete = setup ? 'new-password' : 'current-password';
   $('#confirm-password-field').hidden = !setup; $('#confirm-password').required = setup;
+  const publicData = await request('/api/public-data').catch(() => null);
+  if (publicData && !snapshot && !$('#auth-view').hidden) applyBrand(publicData.document.settings);
 }
 $('#auth-form').onsubmit = async event => {
   event.preventDefault(); $('#auth-error').textContent = '';

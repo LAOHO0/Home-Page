@@ -7,6 +7,44 @@ export function iconButton(name, title, action) {
   const button = document.createElement('button'); button.type = 'button'; button.className = 'icon-button'; button.title = title; button.setAttribute('aria-label', title); button.append(icon(name)); if (action) button.addEventListener('click', action); return button;
 }
 export function installIcons(root = document) { root.querySelectorAll('[data-icon]').forEach(el => { el.replaceChildren(icon(el.dataset.icon)); }); }
+const brandLoads = new WeakMap();
+export function applyBrand(settings, root = document) {
+  root.querySelectorAll('[data-site-name]').forEach(node => { node.textContent = settings.siteName; });
+  root.title = (root.body.classList.contains('admin-body') ? '管理后台 · ' : '') + settings.siteName;
+  const marks = [...root.querySelectorAll('[data-brand-logo]')].map(node => {
+    const topbar = node.closest('.topbar') && root.documentElement.dataset.openLayout === 'true';
+    const ink = root.body.classList.contains('home') ? topbar ? root.documentElement.style.getPropertyValue('--overview-ink') : root.body.style.getPropertyValue('--fg') : '#202724';
+    const rgb = [1, 3, 5].map(offset => parseInt(ink.slice(offset, offset + 2), 16));
+    const lightInk = rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 > 160;
+    return { node, fallback: lightInk ? '/brand/logo-inverse.svg' : '/brand/logo.svg' };
+  });
+  const fallback = marks.map(mark => mark.fallback).join(',');
+  const source = settings.logo || '';
+  const previous = brandLoads.get(root);
+  if (previous?.source === source && previous.fallback === fallback) return;
+  if (previous) { clearTimeout(previous.timer); if (previous.image) previous.image.onload = previous.image.onerror = null; }
+  const load = { source, fallback }; brandLoads.set(root, load);
+  function display(url, custom = false) {
+    if (brandLoads.get(root) !== load) return;
+    marks.forEach(({ node, fallback }) => {
+      const image = root.createElement('img'); image.src = custom ? url : fallback; image.alt = ''; image.width = image.height = 40; image.referrerPolicy = 'no-referrer';
+      node.replaceChildren(image); node.dataset.customLogo = String(custom);
+    });
+    const favicon = root.querySelector('link[rel="icon"]');
+    if (favicon) { favicon.href = custom ? url : '/brand/favicon.svg'; custom ? favicon.removeAttribute('type') : favicon.setAttribute('type', 'image/svg+xml'); }
+    const touchIcon = root.querySelector('link[rel="apple-touch-icon"]');
+    if (touchIcon) touchIcon.href = custom ? url : '/brand/apple-touch-icon.png';
+  }
+  display();
+  if (!source) return;
+  const image = root.createElement('img'); load.image = image; image.referrerPolicy = 'no-referrer';
+  const finish = success => {
+    clearTimeout(load.timer); image.onload = image.onerror = null;
+    if (success) display(source, true);
+  };
+  image.onload = () => finish(true); image.onerror = () => finish(false);
+  load.timer = setTimeout(() => finish(false), 5000); image.src = source;
+}
 export function textElement(tag, text, className = '') { const node = document.createElement(tag); node.textContent = text; node.className = className; return node; }
 export function storageGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
 export function storageSet(key, value) { try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch {} }
@@ -38,6 +76,8 @@ export function applyAppearance(doc, theme, root = document) {
   root.documentElement.dataset.resourceView = layout.resourceView;
   root.documentElement.dataset.border = layout.borderMode;
   root.documentElement.dataset.joined = String(layout.panelGap === 0);
+  // The flat porcelain preset uses full-width bands; custom panels keep their geometry.
+  root.documentElement.dataset.openLayout = String(root.documentElement.dataset.style === 'porcelain' && layout.panelRadius === 0 && layout.panelGap === 0);
   paintLayer(root.body, a.page);
   paintLayer(root.querySelector('#overview'), a.overview);
   paintLayer(root.querySelector('#resources'), a.resources);
@@ -47,6 +87,9 @@ export function applyAppearance(doc, theme, root = document) {
   const lengths = { 'shell-max': 'maxWidth', 'page-gutter': 'pageGutter', 'panel-radius': 'panelRadius', 'panel-gap': 'panelGap', 'overview-padding': 'overviewPadding', 'resources-padding': 'resourcesPadding', 'overview-gap': 'overviewGap', 'grid-gap': 'gridGap', 'card-padding': 'cardPadding', 'card-min-width': 'cardMinWidth', 'card-lift': 'cardLift' };
   Object.entries(lengths).forEach(([variable, key]) => root.documentElement.style.setProperty('--' + variable, layout[key] + 'px'));
   root.documentElement.style.setProperty('--panel-shadow-opacity', String(layout.panelShadow / 100));
+  root.documentElement.style.setProperty('--overview-color', a.overview.color);
+  root.documentElement.style.setProperty('--overview-ink', a.overview.text);
+  applyBrand(doc.settings, root);
 }
 export function resourceIcon(entry) {
   const box = textElement('span', entry.name.slice(0, 1).toLocaleUpperCase(), 'resource-icon');
@@ -98,9 +141,10 @@ export function makeResourceCard(entry, { withStatus = false } = {}) {
   const link = document.createElement('a'); link.className = 'resource-card'; link.href = entry.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
   const copy = document.createElement('span'); copy.className = 'resource-copy';
   const name = textElement('b', entry.name); name.title = entry.name;
-  copy.append(name, textElement('span', entry.description, 'resource-description'));
+  const title = textElement('span', '', 'resource-title'); title.append(name);
+  copy.append(title, textElement('span', entry.description, 'resource-description'));
   link.append(resourceIcon(entry), copy);
-  if (withStatus) { const status = textElement('span', '', 'resource-status is-checking'); status.title = '正在检测在线状态'; status.setAttribute('aria-label', status.title); link.append(status); }
+  if (withStatus) { const status = textElement('span', '', 'resource-status is-checking'); status.title = '正在检测在线状态'; status.setAttribute('aria-label', status.title); title.append(status); }
   link.append(icon('arrow-up-right')); return link;
 }
 export function showToast(message, error = false) {

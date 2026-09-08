@@ -35,19 +35,19 @@ try {
   assert.ok(await page.locator('.resource-card').first().evaluate(element => element.querySelector('.resource-description').getBoundingClientRect().top >= element.querySelector('b').getBoundingClientRect().bottom));
   await page.waitForFunction(() => [...document.querySelectorAll('.resource-card')].every(card => card.querySelector('img')?.naturalWidth > 0));
   await shot('home-sky-desktop');
-  await page.locator('#search-scope').selectOption('apps'); await page.locator('#query').fill('ai'); assert.equal(await page.locator('.resource-card').count(), 1);
+  await page.locator('#search-scope [data-scope="apps"]').click(); await page.locator('#query').fill('ai'); assert.equal(await page.locator('.resource-card').count(), 1);
   await page.locator('#search-suggestions').getByRole('option').filter({ hasText: 'ChatGPT' }).waitFor();
   await page.locator('#query').fill('不存在'); await page.getByText('没有找到匹配的资源').waitFor();
   await page.locator('#clear-search').click(); assert.equal(await page.locator('.resource-card').count(), 6);
   await page.locator('#bookmarks-tab').click(); await page.locator('#query').fill('Web 开发'); assert.equal(await page.locator('.resource-card').count(), 1);
-  await page.locator('#search-scope').selectOption('web'); await page.locator('#query').fill('Hello world'); assert.equal(await page.locator('.resource-card').count(), 6);
+  await page.locator('#search-scope [data-scope="web"]').click(); await page.locator('#query').fill('Hello world'); assert.equal(await page.locator('.resource-card').count(), 6);
   await page.locator('#query').fill(''); await page.locator('#apps-tab').click();
   await page.locator('#weather-city').click(); await page.locator('#city-query').fill('上海'); await page.locator('#city-search').getByRole('button').click(); await page.getByRole('button', { name: '上海 · 中国', exact: true }).click(); await page.getByText('手动选择', { exact: true }).waitFor();
   for (const width of [375, 768]) { await page.setViewportSize({ width, height: 900 }); await noOverflow(); await shot('home-forest-' + width); }
   await page.route('**/api/weather?*', route => route.fulfill({ json: { city: { name: '北京', country: '中国', latitude: 39.9, longitude: 116.4 }, current: { temperature: 18, code: 3, isDay: false, time: '2026-09-05T12:00' }, fallback: true, requestedCity: city } }), { times: 1 });
   await page.locator('#weather-city').click(); await page.locator('#city-automatic').click();
   await page.locator('#weather-source').filter({ hasText: '默认城市 · 原城市天气不可用' }).waitFor();
-  assert.equal(await page.locator('#weather-city').textContent(), '北京'); assert.equal(await page.locator('#weather-value').textContent(), '阴 · 18°C');
+  assert.equal(await page.locator('#weather-city').textContent(), '北京'); assert.equal(await page.locator('#weather-value').textContent(), '18°C 阴');
   await page.setViewportSize({ width: 375, height: 900 }); await noOverflow();
   await page.setViewportSize({ width: 1440, height: 1000 });
   const response = await page.request.post(base + '/api/auth/setup', { headers: { 'x-navigation-request': '1' }, data: { username: 'browser-test', password: 'Browser-only-test-2026!' } }); assert.equal(response.status(), 200);

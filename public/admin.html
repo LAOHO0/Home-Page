@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="sky">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管理后台 · 我的导航</title><link rel="icon" href="/icons/compass.svg"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/themes.css"><script src="/vendor/sortable.js" defer></script><script type="module" src="/admin.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>管理后台 · 我的导航</title><link rel="icon" href="/brand/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/brand/apple-touch-icon.png"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/themes.css"><script src="/vendor/sortable.js" defer></script><script type="module" src="/admin.js"></script></head>
 <body class="admin-body">
   <section id="auth-view" class="auth-view">
-    <a class="brand" href="/"><span class="brand-logo" data-icon="compass"></span>我的导航</a>
+    <a class="brand" href="/"><span class="brand-logo" data-brand-logo><img src="/brand/logo.svg" width="40" height="40" alt=""></span><span data-site-name>我的导航</span></a>
     <form id="auth-form" class="auth-form"><span class="eyebrow">NAVIGATION / ADMIN</span><h1 id="auth-title">管理后台</h1><p id="auth-message" class="muted">正在检查登录状态…</p>
       <label for="username">用户名</label><input id="username" name="username" value="admin" autocomplete="username" required maxlength="60">
       <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128">
@@ -12,11 +12,11 @@
     </form><a class="muted back-home" href="/">返回首页</a>
   </section>
   <div id="admin-layout" class="admin-layout" hidden>
-    <aside class="sidebar"><a class="brand" href="/"><span class="brand-logo" data-icon="compass"></span><span id="admin-brand">我的导航</span></a><span class="sidebar-label">工作空间</span>
+    <aside class="sidebar"><a class="brand" href="/"><span class="brand-logo" data-brand-logo><img src="/brand/logo.svg" width="40" height="40" alt=""></span><span id="admin-brand" data-site-name>我的导航</span></a><span class="sidebar-label">工作空间</span>
       <nav id="admin-nav" aria-label="管理菜单"><a href="#apps" data-page="apps"><span data-icon="layout-grid"></span>应用<span id="apps-count"></span></a><a href="#bookmarks" data-page="bookmarks"><span data-icon="bookmark"></span>书签<span id="bookmarks-count"></span></a><a href="#taxonomy" data-page="taxonomy"><span data-icon="tags"></span>分类与标签</a><a href="#appearance" data-page="appearance"><span data-icon="palette"></span>主题与背景</a><a href="#settings" data-page="settings"><span data-icon="sliders-horizontal"></span>站点设置</a><a href="#backup" data-page="backup"><span data-icon="archive"></span>备份与迁移</a></nav>
       <div class="sidebar-bottom"><span class="status-dot"></span><span id="admin-username">管理员</span><button id="logout" class="icon-button" title="退出登录" aria-label="退出登录" data-icon="log-out"></button></div>
     </aside>
-    <div class="admin-main"><header class="admin-topbar"><div><p class="eyebrow">我的导航 / 管理</p><h1 id="page-title">应用</h1></div><a href="/" target="_blank" class="button secondary"><span data-icon="external-link"></span>查看首页</a></header>
+    <div class="admin-main"><header class="admin-topbar"><div><p class="eyebrow"><span data-site-name>我的导航</span> / 管理</p><h1 id="page-title">应用</h1></div><a href="/" target="_blank" class="button secondary"><span data-icon="external-link"></span>查看首页</a></header>
       <main class="admin-content">
         <section id="entries-pane" class="admin-pane"><div class="toolbar"><div class="input-icon"><span data-icon="search"></span><input id="manage-query" type="search" placeholder="查找资源" aria-label="查找资源"></div><div class="toolbar-actions"><button id="bulk-import" class="button secondary"><span data-icon="upload"></span>批量导入</button><button id="add-entry" class="button primary"><span data-icon="plus"></span>添加应用</button></div></div><div id="entry-list" class="entry-list"></div></section>
         <section id="taxonomy-pane" class="admin-pane" hidden><div class="toolbar"><div id="taxonomy-tabs" class="segmented"><button data-kind="categories" aria-pressed="true">分类</button><button data-kind="tags" aria-pressed="false">标签</button></div><button id="add-taxonomy" class="button primary"><span data-icon="plus"></span>添加分类</button></div><div id="taxonomy-list" class="taxonomy-list"></div></section>

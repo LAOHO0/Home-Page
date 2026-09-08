@@ -32,10 +32,10 @@ const background = (color, text, extra = {}) => ({ mode: 'solid', color, text, g
 export const themeDefaults = {
   porcelain: {
     style: 'porcelain',
-    page: background('#f6f6f4', '#17171a'),
-    overview: background('#ffffff', '#17171a'), resources: background('#ffffff', '#17171a'),
-    card: { color: '#ffffff', text: '#17171a', opacity: 100, radius: 8 },
-    layout: layout({ maxWidth: 1320, pageGutter: 32, panelRadius: 10, panelGap: 20, overviewPadding: 40, resourcesPadding: 32, overviewGap: 48, gridGap: 12, cardPadding: 18, cardMinWidth: 230, panelShadow: 4, cardLift: 2, borderMode: 'subtle', overviewLayout: 'split', resourceView: 'grid' }),
+    page: background('#f7f8f8', '#202724'),
+    overview: background('#ffffff', '#202724'), resources: background('#f7f8f8', '#202724'),
+    card: { color: '#ffffff', text: '#202724', opacity: 100, radius: 8 },
+    layout: layout({ maxWidth: 1400, pageGutter: 40, panelRadius: 0, panelGap: 0, overviewPadding: 56, resourcesPadding: 36, overviewGap: 72, gridGap: 12, cardPadding: 20, cardMinWidth: 240, panelShadow: 0, cardLift: 0, borderMode: 'subtle', overviewLayout: 'split', resourceView: 'grid' }),
   },
   classic: {
     style: 'classic',

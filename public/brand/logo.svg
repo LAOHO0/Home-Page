@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>My Navigation</title>
+  <path d="M12 12a6 6 0 0 1 6-6h23l11 11v40L32 48 12 57V12Z" fill="#245D4E"/>
+  <path d="M41 6v11h11L41 6Z" fill="#92C1AD"/>
+  <path d="M24 25h17v17h-6v-7.76L24.24 45 20 40.76 30.76 30H24v-5Z" fill="#fff"/>
+</svg>

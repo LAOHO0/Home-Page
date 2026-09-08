@@ -1,7 +1,7 @@
 import { filterEntries } from './model.js';
 import { $, icon, installIcons, request, textElement, applyAppearance, makeResourceCard, observeResourceStatuses, storageGet, storageSet, showToast, cityPicker } from './ui.js';
 
-let documentData, type = 'apps', activeTag = '', fullIp = '', showIp = false, visitor, weatherSequence = 0;
+let documentData, type = 'apps', searchScope = 'web', activeTag = '', fullIp = '', showIp = false, visitor, weatherSequence = 0;
 const isPreview = new URLSearchParams(location.search).has('preview');
 let manualCity;
 try { manualCity = JSON.parse(storageGet('navigation-city')); } catch {}
@@ -27,27 +27,45 @@ function setTheme(theme) {
 function populate() {
   document.title = documentData.settings.siteName; $('#site-name').textContent = documentData.settings.siteName;
   $('#footer-text').textContent = documentData.settings.footer;
-  const logo = $('#brand-logo'); logo.replaceChildren(icon('compass'));
-  if (documentData.settings.logo) { const img = new Image(32, 32); img.alt = ''; img.src = documentData.settings.logo; img.onload = () => logo.replaceChildren(img); }
   setTheme(documentData.settings.theme);
   $('#search-engine').value = documentData.settings.defaultEngine;
   $('#category-filter').replaceChildren(new Option('全部分类', ''), ...documentData.categories.map(x => new Option(x.name, x.id)));
   const tags = $('#tag-filters'); tags.replaceChildren();
-  documentData.tags.forEach(tag => { const button = textElement('button', `# ${tag.name}`, 'tag-filter'); button.type = 'button'; button.dataset.tag = tag.id; button.setAttribute('aria-pressed', 'false'); button.onclick = () => { activeTag = activeTag === tag.id ? '' : tag.id; render(); }; tags.append(button); });
+  documentData.tags.forEach(tag => {
+    const button = document.createElement('button'); button.className = 'tag-filter'; button.type = 'button'; button.dataset.tag = tag.id;
+    button.setAttribute('aria-label', tag.name); button.setAttribute('aria-pressed', 'false');
+    const count = textElement('small', '', 'tag-count'); count.setAttribute('aria-hidden', 'true');
+    button.append(icon('hash'), textElement('span', tag.name, 'tag-label'), count);
+    button.onclick = () => { activeTag = activeTag === tag.id ? '' : tag.id; render(); }; tags.append(button);
+  });
   render(); updateClock();
 }
 function render() {
   if (!documentData) return;
-  const query = $('#search-scope').value === 'web' ? '' : $('#query').value;
+  const query = searchScope === 'web' ? '' : $('#query').value;
+  $('#search-scope').querySelectorAll('[data-scope]').forEach(button => { const selected = button.dataset.scope === searchScope; button.setAttribute('aria-checked', String(selected)); button.tabIndex = selected ? 0 : -1; });
+  $('#search-engine-field').hidden = searchScope !== 'web';
+  $('#query').placeholder = searchScope === 'web' ? '今天想找点什么？' : '搜索名称、描述、分类或标签';
   const entries = filterEntries(documentData, { type, query, categoryId: $('#category-filter').value, tagId: activeTag });
+  const collection = documentData.entries.filter(entry => entry.type === type);
+  const filtered = Boolean(query || activeTag || $('#category-filter').value);
   const content = $('#content'); content.replaceChildren();
-  $('#resource-count').textContent = documentData.entries.filter(x => x.type === type).length;
-  $('#results-status').textContent = query || activeTag || $('#category-filter').value ? `${entries.length} 个结果` : '';
+  $('#resource-count').textContent = collection.length;
+  $('#results-status').textContent = filtered ? `${entries.length} / ${collection.length} 个` : `全部 ${collection.length} 个`;
+  $('#reset-filters').hidden = !filtered;
   $('#clear-search').hidden = !$('#query').value;
-  $('#tag-filters').querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tag === activeTag)));
+  $('#tag-filters').querySelectorAll('button').forEach(button => {
+    const selected = button.dataset.tag === activeTag; button.setAttribute('aria-pressed', String(selected));
+    button.replaceChild(icon(selected ? 'check' : 'hash'), button.firstElementChild);
+    button.querySelector('.tag-count').textContent = collection.filter(entry => entry.tagIds.includes(button.dataset.tag)).length;
+  });
   $('#collection-tabs').querySelectorAll('button').forEach(button => { const selected = button.dataset.type === type; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });
   content.setAttribute('aria-labelledby', `${type}-tab`);
-  if (!entries.length) { content.append(textElement('p', query || activeTag || $('#category-filter').value ? '没有找到匹配的资源' : '暂无资源', 'empty')); renderSuggestions(); return; }
+  if (!entries.length) {
+    const empty = textElement('div', '', 'empty'); empty.append(icon(filtered ? 'search-x' : 'inbox'), textElement('p', filtered ? '没有找到匹配的资源' : '暂无资源'));
+    if (filtered) { const reset = textElement('button', '清除筛选', 'reset-filters'); reset.type = 'button'; reset.onclick = resetFilters; empty.append(reset); }
+    content.append(empty); renderSuggestions(); return;
+  }
   if (type === 'bookmarks') {
     [...documentData.categories, { id: '', name: '未分类' }].forEach(category => {
       const group = entries.filter(x => x.categoryId === category.id); if (!group.length) return;
@@ -56,10 +74,14 @@ function render() {
   } else { const grid = textElement('div', '', 'resource-grid'); entries.forEach(x => grid.append(makeResourceCard(x, { withStatus: !isPreview }))); content.append(grid); }
   observeResourceStatuses(content); renderSuggestions();
 }
-function switchType(next) { type = next; if ($('#search-scope').value !== 'web') $('#search-scope').value = type; render(); }
+function switchType(next) { type = next; if (searchScope !== 'web') searchScope = type; render(); }
 $('#collection-tabs').addEventListener('click', event => { const button = event.target.closest('[data-type]'); if (button) switchType(button.dataset.type); });
 $('#collection-tabs').addEventListener('keydown', event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); switchType(event.key === 'Home' ? 'apps' : event.key === 'End' ? 'bookmarks' : type === 'apps' ? 'bookmarks' : 'apps'); $(`#${type}-tab`).focus(); } });
 const suggestionBox = $('#search-suggestions');
+let suggestionIndex = -1;
+function hideSuggestions() {
+  suggestionBox.hidden = true; suggestionIndex = -1; $('#query').setAttribute('aria-expanded', 'false'); $('#query').removeAttribute('aria-activedescendant');
+}
 function suggestionMatches(query) {
   const tokens = query.normalize('NFKC').toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   if (!tokens.length) return { entries: [], tags: [] };
@@ -77,7 +99,8 @@ function renderSuggestions() {
   const query = $('#query').value.trim();
   const { entries, tags } = suggestionMatches(query);
   suggestionBox.replaceChildren();
-  if (!query || (!entries.length && !tags.length)) { suggestionBox.hidden = true; return; }
+  suggestionIndex = -1; $('#query').removeAttribute('aria-activedescendant');
+  if (!query || (!entries.length && !tags.length)) { hideSuggestions(); return; }
   tags.forEach(tag => {
     const button = textElement('button', `标签 · ${tag.name}`, 'search-suggestion'); button.type = 'button'; button.dataset.tag = tag.id; button.setAttribute('role', 'option'); suggestionBox.append(button);
   });
@@ -85,28 +108,51 @@ function renderSuggestions() {
     const category = documentData.categories.find(x => x.id === entry.categoryId)?.name || '';
     const button = textElement('button', `${entry.name} · ${entry.type === 'apps' ? '应用' : '书签'}${category ? ' · ' + category : ''}`, 'search-suggestion'); button.type = 'button'; button.dataset.entry = entry.id; button.setAttribute('role', 'option'); suggestionBox.append(button);
   });
-  suggestionBox.hidden = false;
+  [...suggestionBox.children].forEach((button, index) => { button.id = `suggestion-${index}`; button.tabIndex = -1; button.setAttribute('aria-selected', 'false'); });
+  suggestionBox.hidden = false; $('#query').setAttribute('aria-expanded', 'true');
 }
 suggestionBox?.addEventListener('click', event => {
   const button = event.target.closest('[data-tag], [data-entry]'); if (!button) return;
-  if (button.dataset.tag) { activeTag = button.dataset.tag; $('#query').value = ''; suggestionBox.hidden = true; render(); return; }
+  if (button.dataset.tag) { activeTag = button.dataset.tag; $('#query').value = ''; render(); hideSuggestions(); return; }
   const entry = documentData.entries.find(x => x.id === button.dataset.entry); if (entry) window.open(entry.url, '_blank', 'noopener,noreferrer');
-  suggestionBox.hidden = true;
+  hideSuggestions();
 });
 $('#query').addEventListener('input', () => { render(); });
-$('#query').addEventListener('keydown', event => { if (event.key === 'Escape') { suggestionBox.hidden = true; } });
-$('#clear-search').onclick = () => { $('#query').value = ''; activeTag = ''; $('#category-filter').value = ''; suggestionBox.hidden = true; render(); $('#query').focus(); };
+$('#query').addEventListener('focus', renderSuggestions);
+$('#query').addEventListener('keydown', event => {
+  if (event.isComposing) return;
+  if (event.key === 'Escape') { if (!suggestionBox.hidden) event.preventDefault(); hideSuggestions(); return; }
+  if (event.key === 'Tab') { hideSuggestions(); return; }
+  if (suggestionBox.hidden) return;
+  const options = [...suggestionBox.children];
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault(); suggestionIndex = (suggestionIndex + (event.key === 'ArrowDown' ? 1 : suggestionIndex < 0 ? 0 : -1) + options.length) % options.length;
+    options.forEach((option, index) => option.setAttribute('aria-selected', String(index === suggestionIndex)));
+    $('#query').setAttribute('aria-activedescendant', options[suggestionIndex].id); options[suggestionIndex].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter' && suggestionIndex >= 0) { event.preventDefault(); options[suggestionIndex].click(); }
+});
+function resetFilters() { $('#query').value = ''; activeTag = ''; $('#category-filter').value = ''; render(); hideSuggestions(); $('#category-filter').focus(); }
+$('#reset-filters').onclick = resetFilters;
+$('#clear-search').onclick = () => { $('#query').value = ''; render(); hideSuggestions(); $('#query').focus(); };
 $('#category-filter').onchange = render;
-$('#search-scope').onchange = () => { const scope = $('#search-scope').value; $('#search-engine').hidden = scope !== 'web'; $('#query').placeholder = scope === 'web' ? '今天想找点什么？' : '搜索名称、描述、分类或标签'; if (scope !== 'web') type = scope; render(); };
+function switchScope(scope) { searchScope = scope; if (scope !== 'web') type = scope; render(); hideSuggestions(); }
+$('#search-scope').onclick = event => { const button = event.target.closest('[data-scope]'); if (button) switchScope(button.dataset.scope); };
+$('#search-scope').onkeydown = event => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault(); const scopes = ['web', 'apps', 'bookmarks'];
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (scopes.indexOf(searchScope) + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
+  switchScope(scopes[index]); $('#search-scope').querySelector(`[data-scope="${searchScope}"]`).focus();
+};
 $('#search-form').onsubmit = event => {
   event.preventDefault(); const query = $('#query').value.trim(); if (!query) { $('#query').focus(); return; }
-  if ($('#search-scope').value !== 'web') return render();
+  if (searchScope !== 'web') return render();
   const urls = { google: 'https://www.google.com/search?q=', baidu: 'https://www.baidu.com/s?wd=', bing: 'https://www.bing.com/search?q=' };
   window.open(urls[$('#search-engine').value] + encodeURIComponent(query), '_blank', 'noopener,noreferrer');
 };
 function paintIp() {
   $('#visitor-ip').textContent = 'IP · ' + (fullIp ? showIp ? fullIp : fullIp.includes('.') ? fullIp.replace(/^(\d+)\..*\.(\d+)$/, '$1.***.***.$2') : fullIp.slice(0, 7) + '…' : '暂不可用');
   $('#visitor-ip').disabled = !fullIp; $('#visitor-ip').title = showIp ? '隐藏完整 IP' : '显示完整 IP';
+  $('#visitor-ip').setAttribute('aria-pressed', String(showIp)); $('#visitor-ip').append(icon(showIp ? 'eye-off' : 'eye'));
 }
 $('#visitor-ip').onclick = () => { showIp = !showIp; paintIp(); };
 async function loadWeather() {
@@ -126,7 +172,7 @@ async function loadWeather() {
     }
     if (!result.current) { $('#weather-value').textContent = '天气暂不可用'; $('#weather-icon').replaceChildren(icon('cloud-off')); return; }
     const [text, name] = codes.get(result.current.code) || ['未知天气', 'cloud'];
-    $('#weather-value').textContent = `${text} · ${Math.round(result.current.temperature)}°C`;
+    $('#weather-value').replaceChildren(textElement('span', `${Math.round(result.current.temperature)}°C`, 'weather-temperature'), document.createTextNode(' '), textElement('span', text, 'weather-condition'));
     $('#weather-icon').replaceChildren(icon(name === 'sun' && !result.current.isDay ? 'moon' : name));
     $('#weather-value').title = '数据更新时间：' + result.current.time;
   } catch {
@@ -153,5 +199,5 @@ window.addEventListener('message', event => {
   if (!isPreview || event.origin !== location.origin || event.source !== parent || event.data?.type !== 'navigation-preview' || !event.data.document) return;
   documentData = event.data.document; populate(); setTheme(event.data.theme);
 });
-document.addEventListener('click', event => { if (!event.target.closest('#search-form')) suggestionBox?.setAttribute('hidden', ''); });
+document.addEventListener('click', event => { if (!event.target.closest('#search-form')) hideSuggestions(); });
 boot();

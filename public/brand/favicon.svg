@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 0 56 64" fill="none">
+  <title>My Navigation</title>
+  <style>.paper{fill:#245d4e}.fold{fill:#92c1ad}.arrow{fill:#fff}@media(prefers-color-scheme:dark){.paper{fill:#d1e9dc}.fold{fill:#79b29b}.arrow{fill:#203c30}}</style>
+  <path class="paper" d="M12 12a6 6 0 0 1 6-6h23l11 11v40L32 48 12 57V12Z"/>
+  <path class="fold" d="M41 6v11h11L41 6Z"/>
+  <path class="arrow" d="M24 25h17v17h-6v-7.76L24.24 45 20 40.76 30.76 30H24v-5Z"/>
+</svg>

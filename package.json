@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node --use-env-proxy src/server.js",
     "test": "node --test tests/*.test.js",
-    "test:ui": "node tests/browser.mjs",
+    "test:ui": "node tests/browser.mjs && node tests/appearance-browser.mjs",
     "check": "node --check src/app.js && node --check src/database.js && node --check src/schema.js && node --check src/weather.js && node --check src/favicon.js && node --check public/home.js && node --check public/admin.js && node --check public/ui.js && node --check public/model.js && node --check public/import.js && node --check public/bulk-import.js && node --check public/appearance.js"
   },
   "dependencies": {

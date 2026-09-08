@@ -258,7 +258,7 @@ test('documents from before the porcelain theme receive the new theme defaults',
   delete legacy.settings.appearances.porcelain;
   const parsed = documentSchema.parse(legacy);
   assert.equal(parsed.settings.appearances.porcelain.style, 'porcelain');
-  assert.equal(parsed.settings.appearances.porcelain.layout.panelRadius, 10);
+  assert.equal(parsed.settings.appearances.porcelain.layout.panelRadius, 0);
   assert.equal(parsed.settings.appearances.porcelain.card.color, '#ffffff');
 });
 
