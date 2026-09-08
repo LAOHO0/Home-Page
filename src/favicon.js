@@ -1,0 +1,111 @@
+import http from 'node:http';
+import https from 'node:https';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { BlockList, isIP } from 'node:net';
+import sharp from 'sharp';
+import decodeIco from 'decode-ico';
+import { isWebUrl } from './schema.js';
+import { faviconUrls } from '../public/model.js';
+
+const maxBytes = 2 * 1024 * 1024;
+const blocked = new BlockList(), globalV6 = new BlockList();
+for (const [address, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(address, prefix);
+globalV6.addSubnet('2000::', 3, 'ipv6');
+for (const [address, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3ffe::', 16], ['3fff::', 20]]) blocked.addSubnet(address, prefix, 'ipv6');
+function publicAddress(address) {
+  return isIP(address) === 4 ? !blocked.check(address) : isIP(address) === 6 && globalV6.check(address, 'ipv6') && !blocked.check(address, 'ipv6');
+}
+function hostname(url) { return url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, ''); }
+function unsafeTarget() { const error = Error('Non-public favicon target'); error.code = 'PRIVATE_TARGET'; return error; }
+function validateTarget(url) {
+  const host = hostname(url);
+  if (!isWebUrl(url.href) || !host || /(^|\.)(localhost|local|internal|lan|home|onion)$/i.test(host) || (isIP(host) && !publicAddress(host))) throw unsafeTarget();
+}
+function bounded(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) { reject(signal.reason); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+// Connect to the validated IP, retaining the original Host and TLS server name.
+// This prevents DNS rebinding and does not inherit an environment proxy.
+function requestImage(url, { address, family, signal }) {
+  return new Promise((resolve, reject) => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const request = transport.get({ hostname: address, family, port: url.port || (url.protocol === 'https:' ? 443 : 80), path: url.pathname + url.search,
+      servername: isIP(hostname(url)) ? '' : hostname(url), agent: false, signal,
+      headers: { Host: url.host, Accept: 'image/*', 'Accept-Encoding': 'identity', 'User-Agent': 'Home-Page-Favicon/1.0' },
+    }, response => {
+      let size = 0; const chunks = [];
+      if (Number(response.headers['content-length']) > maxBytes) { response.destroy(Error('Favicon too large')); }
+      response.on('error', reject);
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > maxBytes) { response.destroy(Error('Favicon too large')); return; }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({ status: response.statusCode, ok: response.statusCode >= 200 && response.statusCode < 300,
+        headers: new Headers(Object.entries(response.headers).filter(([, value]) => value !== undefined)), arrayBuffer: async () => Buffer.concat(chunks),
+      }));
+    });
+    request.on('error', reject);
+  });
+}
+async function convertFavicon(bytes) {
+  if (!bytes.length || bytes.length > maxBytes) throw Error('Invalid favicon size');
+  let raw;
+  if (bytes.length >= 6 && bytes.readUInt32LE(0) === 0x00010000) {
+    const count = bytes.readUInt16LE(4), end = 6 + count * 16;
+    if (!count || count > 32 || end > bytes.length) throw Error('Invalid ICO directory');
+    const entries = Array.from({ length: count }, (_, index) => {
+      const offset = 6 + index * 16, size = bytes.readUInt32LE(offset + 8), start = bytes.readUInt32LE(offset + 12);
+      if (!size || start < end || start + size > bytes.length) throw Error('Invalid ICO image');
+      return { offset, size, start, width: bytes[offset] || 256, height: bytes[offset + 1] || 256 };
+    }).sort((a, b) => b.width * b.height - a.width * a.height);
+    const best = entries[0], payload = bytes.subarray(best.start, best.start + best.size);
+    if (!payload.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+      if (payload.length < 40 || payload.readUInt32LE(0) < 40 || payload.readInt32LE(4) !== best.width || Math.abs(payload.readInt32LE(8)) !== best.height * 2) throw Error('Invalid ICO bitmap dimensions');
+    }
+    // Decode one bounded frame instead of allocating every ICO bitmap.
+    const single = Buffer.alloc(22 + payload.length);
+    bytes.copy(single, 0, 0, 6); single.writeUInt16LE(1, 4);
+    bytes.copy(single, 6, best.offset, best.offset + 16); single.writeUInt32LE(22, 18); payload.copy(single, 22);
+    const image = decodeIco(single)[0]; bytes = Buffer.from(image.data);
+    if (image.type === 'bmp') raw = { width: image.width, height: image.height, channels: 4 };
+  }
+  const pipeline = sharp(bytes, { limitInputPixels: 1_048_576, animated: false, ...(raw ? { raw } : {}) });
+  const meta = await pipeline.metadata();
+  if (!['png', 'jpeg', 'webp', 'gif', 'raw'].includes(meta.format)) throw Error('Unsupported favicon image');
+  return pipeline.rotate().resize({ width: 128, height: 128, fit: 'inside', withoutEnlargement: true }).webp({ quality: 86 }).toBuffer();
+}
+export function createFaviconService({ lookup = dnsLookup, request = requestImage } = {}) {
+  return async value => {
+    let sources;
+    try { validateTarget(new URL(value)); sources = faviconUrls(value); } catch { return null; }
+    for (const source of sources) {
+      let url = new URL(source);
+      const signal = AbortSignal.timeout(3000);
+      try {
+        for (let redirect = 0; redirect <= 3; redirect++) {
+          validateTarget(url);
+          const host = hostname(url);
+          const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await bounded(lookup(host, { all: true, verbatim: true }), signal);
+          if (!addresses.length) throw Error('Favicon DNS unavailable');
+          if (addresses.some(item => !publicAddress(item.address))) throw unsafeTarget();
+          const response = await bounded(request(url, { ...addresses[0], signal }), signal);
+          if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.get('location'); if (!location) throw Error('Invalid redirect');
+            url = new URL(location, url); continue;
+          }
+          if (!response.ok || Number(response.headers.get('content-length')) > maxBytes) throw Error('Favicon unavailable');
+          return await convertFavicon(Buffer.from(await bounded(response.arrayBuffer(), signal)));
+        }
+      } catch (error) {
+        if (source === sources[0] && error.code === 'PRIVATE_TARGET') return null;
+      }
+    }
+    return null;
+  };
+}

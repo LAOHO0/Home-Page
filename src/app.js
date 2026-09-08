@@ -10,8 +10,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './database.js';
-import { citySchema, credentialsSchema, documentSchema, imageReferences, uploadPath } from './schema.js';
+import { citySchema, credentialsSchema, documentSchema, imageReferences, uploadPath, isWebUrl } from './schema.js';
 import { createWeatherService, isLoopback } from './weather.js';
+import { createFaviconService } from './favicon.js';
 import { backupByteLimit } from '../public/model.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,10 +23,11 @@ const revisionSchema = z.number().int().positive();
 function failure(message, status = 400) { const error = new Error(message); error.status = status; return error; }
 function sessionToken(req) { return /(?:^|;\s*)navigation_session=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1] || ''; }
 
-export async function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), weather = createWeatherService(), allowLocalSetup = true, trustProxy = process.env.TRUST_PROXY || '', initialPassword = process.env.ADMIN_PASSWORD, initialUsername = process.env.ADMIN_USERNAME || 'admin' } = {}) {
+export async function createApp({ dataDir = process.env.DATA_DIR || path.join(root, 'data'), weather = createWeatherService(), faviconNetwork, allowLocalSetup = true, trustProxy = process.env.TRUST_PROXY || '', initialPassword = process.env.ADMIN_PASSWORD, initialUsername = process.env.ADMIN_USERNAME || 'admin' } = {}) {
   const database = openDatabase(dataDir);
   const uploads = path.join(dataDir, 'uploads');
   await fs.mkdir(uploads, { recursive: true });
+  const favicon = createFaviconService(faviconNetwork);
   async function createAdmin(credentials) {
     const { username, password } = credentialsSchema.parse(credentials);
     const salt = randomBytes(16).toString('hex');
@@ -46,9 +48,11 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
     }
     next();
   });
-  const apiLimit = rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '请求过于频繁，请稍后重试。' } });
+  const apiLimit = rateLimit({ windowMs: 60_000, limit: 180, skip: req => req.path === '/admin/favicon', standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '请求过于频繁，请稍后重试。' } });
+  const faviconLimit = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '图标获取较多，请稍后再试；资源仍可保存。' } });
   const authLimit = rateLimit({ windowMs: 15 * 60_000, limit: 12, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '尝试次数过多，请 15 分钟后重试。' } });
   app.use('/api', apiLimit);
+  app.use('/api/admin/favicon', faviconLimit);
   function requireAdmin(req, res, next) { if (!database.authenticated(hashToken(sessionToken(req)))) return next(failure('登录已失效，请重新登录。', 401)); next(); }
   function login(req, res) {
     const token = randomBytes(32).toString('hex');
@@ -108,6 +112,19 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
     const bytes = await convertImage(req.file.buffer), name = randomUUID() + '.webp';
     await fs.writeFile(path.join(uploads, name), bytes, { flag: 'wx' });
     res.json({ url: '/uploads/' + name });
+  });
+  app.post('/api/admin/favicon', express.json({ limit: '8kb' }), async (req, res) => {
+    const { url } = z.object({ url: z.string().max(2000).refine(isWebUrl, '网址必须为不含账号密码的 HTTP(S) 地址') }).strict().parse(req.body);
+    let savedUrl = '';
+    try {
+      const bytes = await favicon(url);
+      if (bytes) {
+        const name = randomUUID() + '.webp';
+        await fs.writeFile(path.join(uploads, name), bytes, { flag: 'wx' });
+        savedUrl = '/uploads/' + name;
+      }
+    } catch { /* An unavailable icon must not prevent saving a resource. */ }
+    res.json({ url: savedUrl });
   });
   app.get('/api/admin/export', async (req, res) => {
     const { document } = database.read();

@@ -9,15 +9,21 @@ import { createApp } from '../src/app.js';
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'navigation-ui-'));
 const output = path.resolve('test-results'); await fs.mkdir(output, { recursive: true });
 const city = { name: '上海', country: '中国', latitude: 31.23, longitude: 121.47 };
+const faviconPng = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#3466a1' } }).png().toBuffer();
 const app = await createApp({ dataDir: directory, initialPassword: undefined, weather: {
   visitor: async () => ({ ip: '203.0.113.42', source: 'visitor', location: { ...city, isp: '测试网络' } }),
   weather: async selected => ({ city: selected, current: { temperature: 25, code: 2, isDay: true, time: '2026-09-05T12:00' } }), cities: async () => [city],
-} });
+}, faviconNetwork: { lookup: async () => [{ address: '93.184.215.14', family: 4 }], request: async url => {
+  const ok = ['example.com', 'icon-success.example'].includes(url.hostname);
+  return new Response(ok ? faviconPng : null, { status: ok ? 200 : 404 });
+} } });
 const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
 const base = 'http://127.0.0.1:' + server.address().port;
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN' });
+await context.addInitScript(() => { Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true }); });
 const page = await context.newPage(); const errors = []; page.on('pageerror', error => errors.push(error.message));
+const faviconRequests = []; page.on('request', request => { if (request.url() === base + '/api/admin/favicon') faviconRequests.push(request.postDataJSON().url); });
 const shot = name => page.screenshot({ path: path.join(output, name + '.png'), fullPage: true, animations: 'disabled' });
 async function noOverflow() { assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow'); }
 async function saved() { await page.getByRole('status').filter({ hasText: /已保存|已恢复|已删除/ }).last().waitFor(); }
@@ -45,13 +51,147 @@ try {
   await page.setViewportSize({ width: 375, height: 900 }); await noOverflow();
   await page.setViewportSize({ width: 1440, height: 1000 });
   const response = await page.request.post(base + '/api/auth/setup', { headers: { 'x-navigation-request': '1' }, data: { username: 'browser-test', password: 'Browser-only-test-2026!' } }); assert.equal(response.status(), 200);
+  let iconSnapshot = await (await page.request.get(base + '/api/public-data')).json();
+  const originalDocument = structuredClone(iconSnapshot.document);
+  iconSnapshot.document.entries = [{ ...iconSnapshot.document.entries[0], icon: 'https://saved-icon.example/icon.png' }];
+  const iconSave = await page.request.put(base + '/api/admin/document', { headers: { 'x-navigation-request': '1' }, data: iconSnapshot }); assert.equal(iconSave.status(), 200);
+  const iconSources = ['https://saved-icon.example/icon.png', base + '/assets/github.png', 'https://github.com/favicon.ico', 'https://www.google.com/s2/favicons?domain=github.com&sz=64', 'https://icons.duckduckgo.com/ip3/github.com.ico'];
+  // Playwright's page.route deliberately aborts URLs ending in /favicon.ico.
+  // Use the browser's network boundary so this fixture exercises the real URL.
+  const iconSession = await context.newCDPSession(page);
+  let iconWinner = 0, attempts = [], completeIcons;
+  iconSession.on('Fetch.requestPaused', async event => {
+    const source = event.request.url;
+    if (!iconSources.includes(source)) { await iconSession.send('Fetch.continueRequest', { requestId: event.requestId }); return; }
+    attempts.push(source);
+    await iconSession.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: source === iconSources[iconWinner] ? 200 : 404, responseHeaders: [{ name: 'Content-Type', value: 'image/png' }], body: source === iconSources[iconWinner] ? faviconPng.toString('base64') : '' });
+    if (source === iconSources[Math.min(iconWinner, iconSources.length - 1)]) completeIcons();
+  });
+  await iconSession.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
+  for (let winner = 0; winner <= iconSources.length; winner++) {
+    iconWinner = winner; attempts = [];
+    const lastIcon = new Promise(resolve => { completeIcons = resolve; });
+    await page.goto(base);
+    if (winner < iconSources.length) {
+      await page.waitForFunction(source => { const image = document.querySelector('.resource-icon img'); return image?.src === source && image.naturalWidth > 0; }, iconSources[winner], { timeout: 3000 }).catch(error => { throw Error(`Favicon source ${winner}; requests ${JSON.stringify(attempts)}`, { cause: error }); });
+    } else {
+      await lastIcon;
+      assert.equal(await page.locator('.resource-icon').textContent(), 'G');
+    }
+    assert.deepEqual(attempts, iconSources.slice(0, Math.min(winner + 1, iconSources.length)));
+  }
+  await iconSession.send('Fetch.disable'); await iconSession.detach();
+  iconSnapshot = await (await page.request.get(base + '/api/public-data')).json();
+  assert.equal((await page.request.put(base + '/api/admin/document', { headers: { 'x-navigation-request': '1' }, data: { revision: iconSnapshot.revision, document: originalDocument } })).status(), 200);
   await page.goto(base + '/admin.html'); await page.locator('#admin-layout').waitFor();
-  await page.locator('#add-entry').click(); await page.locator('#entry-name').fill('测试应用'); await page.locator('#entry-url').fill('https://example.com'); await page.locator('#entry-description').fill('新增资源描述'); await page.locator('#entry-category').selectOption('category-0'); await page.locator('#entry-tags input').first().check(); await page.locator('#entry-form').getByRole('button', { name: '保存', exact: true }).click();
+  await page.locator('#add-entry').click(); await page.locator('#entry-name').fill('测试应用'); await page.locator('#entry-url').fill('example.com'); await page.locator('#entry-url').press('Tab');
+  assert.equal(await page.locator('#entry-url').inputValue(), 'https://example.com');
+  await page.locator('#entry-description').fill('新增资源描述'); await page.locator('#entry-category').selectOption('category-0'); await page.locator('#entry-tags input').first().check(); await page.locator('#entry-form').getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('button', { name: '编辑测试应用', exact: true }).waitFor();
-  await page.getByRole('button', { name: '编辑测试应用', exact: true }).click(); await page.locator('#entry-name').fill('修改后应用'); await page.locator('#entry-form').getByRole('button', { name: '保存', exact: true }).click(); await page.getByRole('button', { name: '编辑修改后应用', exact: true }).waitFor();
+  const autoEntry = (await (await page.request.get(base + '/api/public-data')).json()).document.entries.find(entry => entry.name === '测试应用');
+  assert.match(autoEntry.icon, /^\/uploads\/.*\.webp$/); assert.deepEqual(faviconRequests, ['https://example.com']);
+  await page.getByRole('button', { name: '编辑测试应用', exact: true }).click(); await page.locator('#entry-name').fill('修改后应用');
+  let releaseIcon, markIconPending, markIconComplete;
+  const iconHeld = new Promise(resolve => { releaseIcon = resolve; }), iconPending = new Promise(resolve => { markIconPending = resolve; }), iconComplete = new Promise(resolve => { markIconComplete = resolve; });
+  await page.route('**/api/admin/favicon', async route => {
+    const response = await route.fetch(); markIconPending(); await iconHeld;
+    await route.fulfill({ response }); markIconComplete();
+  }, { times: 1 });
+  await page.locator('#entry-url').fill('icon-success.example'); await page.locator('#fetch-entry-icon').click(); await iconPending;
+  await page.locator('#entry-icon').fill('/assets/github.png'); releaseIcon(); await iconComplete;
+  assert.equal(await page.locator('#entry-icon').inputValue(), '/assets/github.png');
+  await page.locator('#entry-url').fill('icon-success.example'); await page.locator('#fetch-entry-icon').click();
+  await page.locator('#entry-icon-status').filter({ hasText: '已获取' }).waitFor();
+  assert.equal(await page.locator('#entry-url').inputValue(), 'https://icon-success.example');
+  const manualIcon = await page.locator('#entry-icon').inputValue(); assert.match(manualIcon, /^\/uploads\//); assert.notEqual(manualIcon, autoEntry.icon);
+  await page.locator('#entry-url').fill('unavailable.example'); await page.locator('#fetch-entry-icon').click(); await page.locator('#entry-icon-status').filter({ hasText: '未获取到' }).waitFor();
+  assert.equal(await page.locator('#entry-icon').inputValue(), manualIcon);
+  await page.locator('#entry-icon-file').setInputFiles({ name: 'icon.png', mimeType: 'image/png', buffer: faviconPng });
+  await page.waitForFunction(previous => document.querySelector('#entry-icon').value.startsWith('/uploads/') && document.querySelector('#entry-icon').value !== previous, manualIcon);
+  const uploadedIcon = await page.locator('#entry-icon').inputValue(), requestsBeforeSave = faviconRequests.length;
+  await page.locator('#entry-form').getByRole('button', { name: '保存', exact: true }).click(); await page.getByRole('button', { name: '编辑修改后应用', exact: true }).waitFor();
+  assert.equal(faviconRequests.length, requestsBeforeSave);
+  assert.equal((await (await page.request.get(base + '/api/public-data')).json()).document.entries.find(entry => entry.name === '修改后应用').icon, uploadedIcon);
   await page.getByRole('button', { name: '上移修改后应用', exact: true }).click(); await shot('admin-apps-desktop');
   await page.locator('a[data-page="taxonomy"]').click(); await page.locator('#add-taxonomy').click(); await page.locator('#taxonomy-name').fill('新增分类'); await page.locator('#taxonomy-form').getByRole('button', { name: '保存', exact: true }).click(); await page.getByRole('button', { name: '编辑新增分类', exact: true }).waitFor();
   await page.locator('[data-kind="tags"]').click(); await page.locator('#add-taxonomy').click(); await page.locator('#taxonomy-name').fill('新标签'); await page.locator('#taxonomy-form').getByRole('button', { name: '保存', exact: true }).click(); await page.getByRole('button', { name: '编辑新标签', exact: true }).waitFor();
+  await page.route('**/api/admin/favicon', route => route.fulfill({ status: 503, json: { error: '暂时不可用' } }), { times: 1 });
+  await page.locator('a[data-page="bookmarks"]').click(); await page.locator('#add-entry').click(); await page.locator('#entry-name').fill('HTTP 书签'); await page.locator('#entry-url').fill('example.org/docs');
+  await page.locator('#entry-url').press('Enter'); await page.getByRole('button', { name: '编辑HTTP 书签', exact: true }).waitFor();
+  const httpDocument = (await (await page.request.get(base + '/api/public-data')).json()).document;
+  assert.equal(httpDocument.entries.find(entry => entry.name === 'HTTP 书签').url, 'https://example.org/docs');
+  assert.equal(httpDocument.entries.find(entry => entry.name === 'HTTP 书签').icon, '');
+  assert.ok(httpDocument.categories.some(item => item.name === '新增分类'));
+  assert.ok(httpDocument.tags.some(item => item.name === '新标签'));
+  await page.evaluate(() => { Object.defineProperty(crypto, 'getRandomValues', { value: undefined, configurable: true }); });
+  await page.locator('#bulk-import').waitFor({ timeout: 2000 }); await page.locator('#bulk-import').click();
+  await page.locator('#bulk-type').selectOption('apps');
+  await page.locator('#bulk-source').fill('名称,网址,描述,分类,标签\n"批量,工具",bulk.example/docs,批量描述,批量分类,新标签;批量标签\n重复,https://github.com,,,\n不安全,javascript:alert(1),,,');
+  await page.locator('#bulk-preview').click(); await page.locator('#bulk-summary').filter({ hasText: '可导入 1 项' }).waitFor();
+  assert.match(await page.locator('#bulk-summary').textContent(), /重复 1 项.*无效 1 项/);
+  assert.equal((await (await page.request.get(base + '/api/public-data')).json()).document.entries.length, httpDocument.entries.length);
+  await page.locator('#bulk-confirm').click(); await page.locator('#bulk-dialog').waitFor({ state: 'hidden' });
+  const bulkDocument = (await (await page.request.get(base + '/api/public-data')).json()).document;
+  const bulkEntry = bulkDocument.entries.find(entry => entry.name === '批量,工具');
+  assert.equal(bulkEntry.type, 'apps'); assert.equal(bulkEntry.url, 'https://bulk.example/docs');
+  assert.match(bulkEntry.id, /^client-/); assert.equal(bulkEntry.tagIds.length, 2);
+  assert.equal(bulkDocument.categories.find(item => item.id === bulkEntry.categoryId).name, '批量分类');
+  assert.deepEqual(bulkDocument.settings, httpDocument.settings);
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.locator('#bulk-import').click(); assert.equal(await page.locator('#bulk-type').inputValue(), 'bookmarks');
+  const htmlBookmarks = '<!DOCTYPE NETSCAPE-Bookmark-file-1><META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8"><DL><p><DT><H3>浏览器收藏</H3><DL><p><DT><H3>技术资料</H3><DD>文件夹说明<DL><p><DT><A HREF="html.example/docs" TAGS="阅读,浏览器">HTML &amp; 文档</A><DT><A HREF="https://html.example/docs">重复 HTML</A><DT><A HREF="javascript:alert(1)">危险链接</A></DL><p></DL><p></DL><p><script>window.__importExecuted=true</script><img src="https://import-probe.example/pixel">';
+  const importProbes = []; page.on('request', request => { if (request.url().includes('import-probe.example')) importProbes.push(request.url()); });
+  await page.locator('#bulk-file').setInputFiles({ name: 'bookmarks.html', mimeType: 'text/html', buffer: Buffer.from(htmlBookmarks) });
+  await page.locator('#bulk-summary').filter({ hasText: '可导入 1 项' }).waitFor({ timeout: 3000 });
+  assert.match(await page.locator('#bulk-summary').textContent(), /重复 1 项.*无效 1 项/);
+  assert.equal(await page.evaluate(() => window.__importExecuted), undefined); assert.deepEqual(importProbes, []);
+  await noOverflow(); assert.ok(await page.locator('#bulk-dialog').evaluate(element => element.scrollWidth <= element.clientWidth + 1)); await shot('admin-bulk-import-mobile');
+  await page.locator('#bulk-fetch-icons').uncheck(); const requestsBeforeImport = faviconRequests.length;
+  await page.locator('#bulk-confirm').click(); await page.locator('#bulk-dialog').waitFor({ state: 'hidden' });
+  const htmlDocument = (await (await page.request.get(base + '/api/public-data')).json()).document;
+  const htmlEntry = htmlDocument.entries.find(entry => entry.name === 'HTML & 文档');
+  assert.equal(htmlEntry.url, 'https://html.example/docs'); assert.equal(htmlEntry.type, 'bookmarks');
+  assert.equal(htmlDocument.categories.find(category => category.id === htmlEntry.categoryId).name, '技术资料');
+  assert.equal(htmlEntry.tagIds.length, 2); assert.equal(faviconRequests.length, requestsBeforeImport);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('#bulk-import').click(); await page.locator('#bulk-source').fill('plain.example\nhttp://example.org:8080/legacy'); await page.locator('#bulk-preview').click();
+  await page.locator('#bulk-source').fill('plain.example\nhttp://example.org:8080/legacy\n'); assert.equal(await page.locator('#bulk-confirm').isDisabled(), true);
+  await page.locator('#bulk-preview').click(); await page.locator('#bulk-fetch-icons').uncheck();
+  const otherWindow = await (await page.request.get(base + '/api/public-data')).json();
+  otherWindow.document.entries.push({ ...otherWindow.document.entries[0], id: 'another-window', type: 'bookmarks', name: '另一窗口添加', url: 'https://outside.example', icon: '' });
+  otherWindow.document.entries.find(entry => entry.name === 'HTTP 书签').description = '另一窗口更新说明';
+  assert.equal((await page.request.put(base + '/api/admin/document', { headers: { 'x-navigation-request': '1' }, data: otherWindow })).status(), 200);
+  await page.locator('#bulk-confirm').click(); await page.locator('#bulk-error').filter({ hasText: '重新预览' }).waitFor();
+  assert.equal(await page.locator('#bulk-confirm').isDisabled(), true);
+  assert.equal((await (await page.request.get(base + '/api/public-data')).json()).document.entries.some(entry => entry.url === 'https://plain.example'), false);
+  await page.locator('#bulk-dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '编辑HTTP 书签', exact: true }).click();
+  assert.equal(await page.locator('#entry-description').inputValue(), '另一窗口更新说明');
+  await page.locator('#entry-dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.locator('#bulk-import').click(); await page.locator('#bulk-source').fill('plain.example\nhttp://example.org:8080/legacy'); await page.locator('#bulk-fetch-icons').uncheck();
+  await page.locator('#bulk-preview').click(); await shot('admin-bulk-import-desktop');
+  await page.locator('#bulk-confirm').click(); await page.locator('#bulk-dialog').waitFor({ state: 'hidden' });
+  const mergedDocument = (await (await page.request.get(base + '/api/public-data')).json()).document;
+  assert.ok(mergedDocument.entries.some(entry => entry.name === '另一窗口添加'));
+  assert.ok(mergedDocument.entries.some(entry => entry.url === 'https://plain.example'));
+  assert.ok(mergedDocument.entries.some(entry => entry.url === 'http://example.org:8080/legacy'));
+  await page.locator('#bulk-import').click(); await page.locator('#bulk-source').fill('retry.example');
+  await page.locator('#bulk-preview').click(); await page.locator('#bulk-fetch-icons').uncheck();
+  const beforeRetry = await (await page.request.get(base + '/api/public-data')).json();
+  beforeRetry.document.entries.find(entry => entry.name === 'HTTP 书签').description = '刷新失败期间的修改';
+  assert.equal((await page.request.put(base + '/api/admin/document', { headers: { 'x-navigation-request': '1' }, data: beforeRetry })).status(), 200);
+  await page.route('**/api/public-data', route => route.fulfill({ status: 503, json: { error: '临时无法刷新' } }), { times: 2 });
+  await page.locator('#bulk-confirm').click();
+  await page.locator('#bulk-error').filter({ hasText: '刷新最新内容失败' }).waitFor({ timeout: 2000 });
+  assert.equal(await page.locator('#bulk-confirm').isDisabled(), true);
+  await page.locator('#bulk-preview').click();
+  await page.locator('#bulk-error').filter({ hasText: '刷新最新内容失败' }).waitFor({ timeout: 2000 });
+  assert.equal(await page.locator('#bulk-confirm').isDisabled(), true);
+  await page.locator('#bulk-preview').click(); await page.locator('#bulk-summary').filter({ hasText: '可导入 1 项' }).waitFor();
+  await page.locator('#bulk-confirm').click(); await page.locator('#bulk-dialog').waitFor({ state: 'hidden' });
+  const retryDocument = (await (await page.request.get(base + '/api/public-data')).json()).document;
+  assert.equal(retryDocument.entries.find(entry => entry.name === 'HTTP 书签').description, '刷新失败期间的修改');
+  assert.ok(retryDocument.entries.some(entry => entry.url === 'https://retry.example'));
   await page.locator('a[data-page="appearance"]').click(); await page.locator('.theme-choice[data-theme="porcelain"]').click();
   assert.equal(await page.locator('.theme-choice[data-theme="porcelain"]').getAttribute('aria-checked'), 'true');
   await page.locator('[data-preset="roomy"]').click();
@@ -102,6 +242,6 @@ try {
   await page.locator('a[data-page="appearance"]').click(); await noOverflow(); await shot('admin-appearance-mobile');
   await page.locator('#logout').click(); await page.locator('#auth-view').waitFor(); await page.reload(); await page.locator('#auth-view').waitFor();
   assert.deepEqual(errors, []);
-  console.log('Browser checks passed: themes, mobile layout, search, visitor masking, manual weather, CRUD, reorder, taxonomy, uploaded backgrounds, settings, backup and logout.');
+  console.log('Browser checks passed: themes, mobile layout, search, weather, HTTP-compatible IDs, URL normalization, favicon fetching and fallbacks, HTML/CSV/text bulk import, revision conflicts, CRUD, uploads, backup and logout.');
 } catch (error) { await shot('failure'); console.error('Page errors:', errors); throw error; }
 finally { await browser.close(); await new Promise(resolve => server.close(resolve)); app.locals.database.close(); await fs.rm(directory, { recursive: true, force: true }); }

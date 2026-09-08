@@ -7,8 +7,191 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { createApp } from '../src/app.js';
 import { createWeatherService, isPublicIp } from '../src/weather.js';
-import { filterEntries, createDefaultDocument } from '../public/model.js';
+import { filterEntries, createDefaultDocument, createClientId, normalizeWebUrl } from '../public/model.js';
 import { documentSchema } from '../src/schema.js';
+import { parseImportSource, prepareImport } from '../public/import.js';
+
+test('bulk import previews CSV and text, skips duplicate or unsafe URLs and appends without replacing data', () => {
+  const original = createDefaultDocument(), before = structuredClone(original);
+  const csv = '\ufeff名称,网址,描述,分类,标签\r\n"示例,工具",example.com,"第一行\n第二行",资料,开发;新标签\r\n重复,https://example.com/,,,\r\n已有,https://github.com,,,\r\n不安全,javascript:alert(1),,,\r\n凭据,https://a:b@example.org,,,\r\n文档,docs.example.org,,,\r\n';
+  const plan = prepareImport(original, parseImportSource(csv), 'apps');
+  assert.deepEqual(plan.counts, { added: 2, duplicate: 2, invalid: 2, categories: 1, tags: 1 });
+  assert.deepEqual(original, before); assert.deepEqual(plan.document.settings, before.settings);
+  assert.deepEqual(plan.document.entries.slice(0, before.entries.length), before.entries);
+  const added = plan.document.entries.slice(before.entries.length);
+  assert.equal(added[0].name, '示例,工具'); assert.equal(added[0].url, 'https://example.com');
+  assert.equal(added[0].description, '第一行\n第二行'); assert.equal(added[0].tagIds.length, 2);
+  assert.equal(plan.document.categories.find(item => item.id === added[0].categoryId).name, '资料');
+  assert.doesNotThrow(() => documentSchema.parse(plan.document));
+  const bookmarks = prepareImport(plan.document, parseImportSource('github.com\n\n example.com \nnot a url'), 'bookmarks');
+  assert.equal(bookmarks.counts.added, 2); assert.equal(bookmarks.counts.invalid, 1);
+  assert.equal(bookmarks.document.entries.at(-1).type, 'bookmarks');
+  assert.throws(() => parseImportSource('name,url\n"unfinished,example.com', 'csv'), /引号/);
+});
+
+async function faviconServer(t, network) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'navigation-favicon-'));
+  const app = await createApp({ dataDir: directory, initialUsername: 'favicon-test', initialPassword: 'Favicon-test-only-2026!', faviconNetwork: {
+    lookup: async () => [{ address: '93.184.215.14', family: 4 }], ...network,
+  } });
+  const server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); app.locals.database.close(); await fs.rm(directory, { recursive: true, force: true }); });
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'x-navigation-request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'favicon-test', password: 'Favicon-test-only-2026!' }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  return (route, options = {}) => fetch(base + route, { ...options, headers: { Cookie: cookie, 'x-navigation-request': '1', 'Content-Type': 'application/json', ...options.headers } });
+}
+
+test('CSV descriptions containing HTML stay plain text and import limits are previewed', () => {
+  const csv = 'name,url,description\nExample,example.com,"<a href=""https://other.example"">说明</a>"';
+  for (const format of ['auto', 'csv']) {
+    const records = parseImportSource(csv, format);
+    assert.equal(records[0].url, 'example.com'); assert.equal(records[0].description, '<a href="https://other.example">说明</a>');
+  }
+  const full = createDefaultDocument();
+  full.entries = Array.from({ length: 1999 }, (_, index) => ({ ...full.entries[0], id: 'full-' + index, url: 'https://existing.example/' + index }));
+  const plan = prepareImport(full, [{ url: 'one.example', category: '可创建' }, { url: 'two.example', category: '不应创建' }], 'apps');
+  assert.equal(plan.counts.added, 1); assert.equal(plan.counts.invalid, 1); assert.equal(plan.document.entries.length, 2000);
+  assert.equal(plan.document.categories.some(category => category.name === '不应创建'), false);
+  assert.throws(() => parseImportSource('x'.repeat(5 * 1024 * 1024 + 1)), /5 MB/);
+  assert.throws(() => parseImportSource(Array.from({ length: 2001 }, () => 'example.com').join('\n')), /2000/);
+});
+
+test('favicon endpoint stores a site image as WebP and returns a reusable upload URL', async t => {
+  const png = await sharp({ create: { width: 32, height: 32, channels: 4, background: '#2d996a' } }).png().toBuffer();
+  const call = await faviconServer(t, { request: async url => new Response(url.href === 'https://example.com/favicon.ico' ? png : null, { status: url.href === 'https://example.com/favicon.ico' ? 200 : 404 }) });
+  const response = await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com/path?q=1' }) });
+  assert.equal(response.status, 200);
+  const { url } = await response.json(); assert.match(url, /^\/uploads\/[a-f0-9-]{36}\.webp$/);
+  const image = await call(url); assert.equal(image.status, 200); assert.match(image.headers.get('content-type'), /image\/webp/);
+  assert.equal((await sharp(Buffer.from(await image.arrayBuffer())).metadata()).format, 'webp');
+  const current = await (await call('/api/public-data')).json(); current.document.entries[0].icon = url;
+  assert.equal((await call('/api/admin/document', { method: 'PUT', body: JSON.stringify(current) })).status, 200);
+  assert.ok((await (await call('/api/admin/export')).json()).assets[url]);
+});
+
+test('favicon providers fall back in order and total failure still permits saving', async t => {
+  const png = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#4052ca' } }).png().toBuffer();
+  const sources = ['https://example.com/favicon.ico', 'https://www.google.com/s2/favicons?domain=example.com&sz=64', 'https://icons.duckduckgo.com/ip3/example.com.ico'];
+  for (const winner of [0, 1, 2, 3]) {
+    const attempts = [];
+    const call = await faviconServer(t, { request: async url => {
+      attempts.push(url.href);
+      if (url.href === sources[winner]) return new Response(png);
+      if (url.hostname === 'example.com') throw Error('network unavailable');
+      return new Response('<html>not an icon</html>');
+    } });
+    const result = await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com/docs' }) })).json();
+    assert.deepEqual(attempts, sources.slice(0, Math.min(winner + 1, 3)));
+    if (winner < 3) assert.match(result.url, /^\/uploads\//);
+    else {
+      assert.deepEqual(result, { url: '' });
+      const current = await (await call('/api/public-data')).json();
+      current.document.entries.push({ ...current.document.entries[0], id: 'no-favicon', name: 'No icon', icon: result.url });
+      assert.equal((await call('/api/admin/document', { method: 'PUT', body: JSON.stringify(current) })).status, 200);
+    }
+  }
+});
+
+test('favicon endpoint converts both PNG and bitmap images inside ICO containers', async t => {
+  const png = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#669933' } }).png().toBuffer();
+  const bitmap = Buffer.alloc(48);
+  bitmap.writeUInt32LE(40, 0); bitmap.writeInt32LE(1, 4); bitmap.writeInt32LE(2, 8);
+  bitmap.writeUInt16LE(1, 12); bitmap.writeUInt16LE(32, 14); bitmap.writeUInt32LE(8, 20);
+  bitmap.set([0x33, 0x99, 0x66, 0xff], 40);
+  for (const [width, payload] of [[16, png], [1, bitmap]]) {
+    const ico = Buffer.alloc(22 + payload.length);
+    ico.writeUInt16LE(1, 2); ico.writeUInt16LE(1, 4); ico[6] = width; ico[7] = width;
+    ico.writeUInt16LE(1, 10); ico.writeUInt16LE(32, 12); ico.writeUInt32LE(payload.length, 14); ico.writeUInt32LE(22, 18); payload.copy(ico, 22);
+    const call = await faviconServer(t, { request: async url => new Response(url.hostname === 'example.com' ? ico : null, { status: url.hostname === 'example.com' ? 200 : 404 }) });
+    const result = await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) })).json();
+    assert.match(result.url, /^\/uploads\//);
+    const meta = await sharp(Buffer.from(await (await call(result.url)).arrayBuffer())).metadata();
+    assert.equal(meta.format, 'webp'); assert.equal(meta.width, width); assert.equal(meta.height, width);
+  }
+});
+
+test('favicon endpoint keeps authentication and URL validation and rejects private destinations', async t => {
+  const attempts = [];
+  const call = await faviconServer(t, { lookup: async () => [{ address: '93.184.215.14', family: 4 }, { address: '10.0.0.1', family: 4 }], request: async url => { attempts.push(url.href); return new Response(''); } });
+  const options = { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) };
+  assert.equal((await call('/api/admin/favicon', { ...options, headers: { Cookie: '' } })).status, 401);
+  assert.equal((await call('/api/admin/favicon', { ...options, headers: { 'x-navigation-request': '' } })).status, 403);
+  for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'https://user:password@example.com', 'example.com']) {
+    assert.equal((await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url }) })).status, 400);
+  }
+  for (const url of ['http://127.0.0.1', 'http://2130706433', 'http://169.254.169.254', 'http://10.0.0.1', 'http://[::1]', 'http://[::ffff:7f00:1]', 'http://localhost', 'http://printer.local', 'http://example.com']) {
+    const response = await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url }) });
+    assert.equal(response.status, 200); assert.deepEqual(await response.json(), { url: '' });
+  }
+  assert.deepEqual(attempts, []);
+});
+
+test('favicon redirects recheck DNS and cannot cross into private networks', async t => {
+  let lookups = 0; const attempts = [];
+  const call = await faviconServer(t, {
+    lookup: async () => [{ address: ++lookups === 1 ? '93.184.215.14' : '127.0.0.1', family: 4 }],
+    request: async (url, options) => { attempts.push({ url: url.href, address: options.address }); return new Response(null, { status: 302, headers: { location: '/redirected.ico' } }); },
+  });
+  assert.deepEqual(await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) })).json(), { url: '' });
+  assert.deepEqual(attempts, [{ url: 'https://example.com/favicon.ico', address: '93.184.215.14' }]);
+});
+
+test('favicon endpoint rejects oversized and malformed image payloads', async t => {
+  for (const body of [Buffer.alloc(2 * 1024 * 1024 + 1), Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>'), Buffer.from([0, 0, 1, 0, 255, 255])]) {
+    const call = await faviconServer(t, { request: async () => new Response(body) });
+    assert.deepEqual(await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) })).json(), { url: '' });
+  }
+});
+
+test('favicon endpoint eventually returns an empty URL when every provider stalls', async t => {
+  const call = await faviconServer(t, { request: () => new Promise(() => {}) });
+  const started = Date.now();
+  const response = await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) });
+  assert.equal(response.status, 200); assert.deepEqual(await response.json(), { url: '' });
+  assert.ok(Date.now() - started < 15000, 'resource saving must not wait indefinitely for an icon');
+});
+
+test('bulk favicon requests cannot exhaust the resource saving rate limit', async t => {
+  const call = await faviconServer(t, { request: async () => new Response(null, { status: 404 }) });
+  let limited = 0;
+  for (let i = 0; i < 185; i++) {
+    const response = await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) });
+    if (response.status === 429) limited++; await response.json();
+  }
+  assert.ok(limited > 0, 'favicon traffic has its own limit');
+  const data = await call('/api/public-data'); assert.equal(data.status, 200);
+  const current = await data.json();
+  current.document.entries.push({ ...current.document.entries[0], id: 'bulk-after-icons', icon: '' });
+  assert.equal((await call('/api/admin/document', { method: 'PUT', body: JSON.stringify(current) })).status, 200);
+});
+
+test('client IDs work with secure, HTTP-only and legacy browser crypto', () => {
+  const uuid = 'ce9c614e-ff7b-4ee8-990f-c57c751d02a0';
+  assert.equal(createClientId({ randomUUID: () => uuid }), uuid);
+  assert.equal(createClientId({ getRandomValues: bytes => bytes.fill(0) }), '00000000-0000-4000-8000-000000000000');
+  for (const cryptoApi of [{}, { randomUUID() { throw Error('unavailable'); }, getRandomValues() { throw Error('unavailable'); } }]) {
+    const ids = Array.from({ length: 500 }, () => createClientId(cryptoApi));
+    assert.equal(new Set(ids).size, 500);
+    assert.ok(ids.every(id => /^[a-zA-Z0-9_-]{1,80}$/.test(id)));
+  }
+});
+
+test('web URLs accept bare domains without disguising unsafe schemes or credentials', () => {
+  const cases = [
+    [' example.com ', 'https://example.com'], ['example.com:8080/path', 'https://example.com:8080/path'],
+    ['//example.com/path', 'https://example.com/path'], ['HTTP://example.com/a?x=1#b', 'HTTP://example.com/a?x=1#b'],
+    ['https://example.com', 'https://example.com'], ['', ''],
+    ['javascript:alert(1)', 'javascript:alert(1)'], ['javascript:123', 'javascript:123'], ['data:123', 'data:123'],
+    ['ftp://example.com', 'ftp://example.com'], ['/relative', '/relative'],
+  ];
+  for (const [input, expected] of cases) assert.equal(normalizeWebUrl(input), expected);
+  for (const unsafe of ['javascript:alert(1)', 'data:text/html,test', 'ftp://example.com', 'https://user:password@example.com']) {
+    const doc = createDefaultDocument(); doc.entries[0].url = normalizeWebUrl(unsafe);
+    assert.equal(documentSchema.safeParse(doc).success, false);
+  }
+});
 
 test('legacy themes migrate without losing customization and invalid layouts are rejected', () => {
   const legacy = createDefaultDocument();

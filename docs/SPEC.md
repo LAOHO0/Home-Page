@@ -10,3 +10,13 @@ Node.js + SQLite，本地图片目录持久化，提供 Docker 配置。管理�
 验收：登录权限、增删改持久化、图片上传、主题背景、搜索、定位/天气失败回退、多端浏览器。
 
 不包括访问统计、搜索历史、多用户系统及对外部署。
+
+## 图标与批量导入增量
+
+新增需登录的 POST /api/admin/favicon，依次请求网站 /favicon.ico、Google Favicon、DuckDuckGo Favicon，转 WebP 后保存到 uploads；获取失败返回空地址，不能妨碍资源保存。后台图标为空时自动获取，也提供手动获取并回填，保留上传；首页按已保存图标、内置图标、网站图标、Google、DuckDuckGo 回退。
+
+createClientId 依次采用 randomUUID、getRandomValues、兼容兜底，用于应用、书签、分类和标签。normalizeWebUrl 在网址失焦、手动获取和保存前补全裸域名 HTTPS，保留已指定的 HTTP(S)；后端继续独立校验。
+
+批量导入支持浏览器书签 HTML、CSV/TSV、多行网址，预览后选择导入为应用或书签；同类型重复网址和无效项跳过，追加数据并复用分类标签。保留修订号冲突保护，冲突后重新预览。图标获取的失败、超时和限流不阻止有效资源导入。
+
+交付更新：本轮用户明确要求暂不部署；检查与测试通过后推送 GitHub，不重启线上服务。

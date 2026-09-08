@@ -1,4 +1,4 @@
-import { themeNames, themeDefaults } from './model.js';
+import { themeNames, themeDefaults, faviconUrls } from './model.js';
 export const $ = selector => document.querySelector(selector);
 export const icon = name => {
   const el = document.createElement('i'); el.className = 'icon'; el.setAttribute('aria-hidden', 'true'); el.style.setProperty('--icon', `url('/icons/${name}.svg')`); return el;
@@ -50,11 +50,23 @@ export function applyAppearance(doc, theme, root = document) {
 }
 export function resourceIcon(entry) {
   const box = textElement('span', entry.name.slice(0, 1).toLocaleUpperCase(), 'resource-icon');
-  const img = new Image(40, 40); img.alt = ''; img.decoding = 'async'; img.referrerPolicy = 'no-referrer';
-  const host = new URL(entry.url).hostname;
+  let host;
+  try { host = new URL(entry.url).hostname; } catch { return box; }
   const bundled = { 'github.com': 'github', 'chatgpt.com': 'chatgpt', 'excalidraw.com': 'excalidraw', 'dash.cloudflare.com': 'cloudflare', 'www.notion.so': 'notion', 'notion.so': 'notion', 'www.figma.com': 'figma', 'figma.com': 'figma', 'developer.mozilla.org': 'mdn', 'sspai.com': 'sspai', 'vercel.com': 'vercel', 'www.oschina.net': 'oschina', 'www.bing.com': 'bing', 'www.wikipedia.org': 'wikipedia' };
-  img.onload = () => { box.replaceChildren(img); };
-  img.src = entry.icon || (bundled[host] ? `/assets/${bundled[host]}.png` : `https://favicon.im/${encodeURIComponent(host)}`);
+  const sources = [...new Set([entry.icon, bundled[host] ? `/assets/${bundled[host]}.png` : '', ...faviconUrls(entry.url)].filter(Boolean))];
+  let index = 0;
+  function next() {
+    if (index >= sources.length) return;
+    const img = new Image(40, 40); img.alt = ''; img.decoding = 'async'; img.referrerPolicy = 'no-referrer';
+    let finished = false;
+    const finish = success => {
+      if (finished) return; finished = true; clearTimeout(timer); img.onload = img.onerror = null;
+      if (success) box.replaceChildren(img); else next();
+    };
+    const timer = setTimeout(() => finish(false), 4000);
+    img.onload = () => finish(true); img.onerror = () => finish(false); img.src = sources[index++];
+  }
+  next();
   return box;
 }
 let resourceStatusObserver;

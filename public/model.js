@@ -1,5 +1,32 @@
 export const themeNames = { classic: '经典 · 圆润旧版', sky: '晴空 · 轻盈白', graphite: '终端 · 石墨黑', forest: '山岚 · 自然绿', porcelain: '月白 · 极简' };
 export const backupByteLimit = 35 * 1024 * 1024;
+export function normalizeWebUrl(value) {
+  const url = String(value ?? '').trim();
+  if (!url || /^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('//')) return 'https:' + url;
+  if (/^[/?#]/.test(url)) return url;
+  const hostWithPort = /^(?:localhost|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]):\d+(?:[/?#]|$)/i.test(url);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url) && !hostWithPort) return url;
+  return 'https://' + url;
+}
+let clientIdSequence = 0;
+export function faviconUrls(value) {
+  const url = new URL(value), host = encodeURIComponent(url.hostname);
+  return [new URL('/favicon.ico', url).href, `https://www.google.com/s2/favicons?domain=${host}&sz=64`, `https://icons.duckduckgo.com/ip3/${host}.ico`];
+}
+export function createClientId(cryptoApi = globalThis.crypto) {
+  try { if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID(); } catch {}
+  try {
+    if (typeof cryptoApi?.getRandomValues === 'function') {
+      const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+      const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+  } catch {}
+  // Resource identifiers, never session tokens or other secrets.
+  return `client-${Date.now().toString(36)}-${(++clientIdSequence).toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 const layout = (extra = {}) => ({ maxWidth: 1280, pageGutter: 40, panelRadius: 0, panelGap: 0, overviewPadding: 38, resourcesPadding: 32, overviewGap: 60, gridGap: 14, cardPadding: 22, cardMinWidth: 240, panelShadow: 0, cardLift: 0, borderMode: 'subtle', overviewLayout: 'split', resourceView: 'grid', ...extra });
 const background = (color, text, extra = {}) => ({ mode: 'solid', color, text, gradientTo: color, angle: 135, image: '', position: 'center', size: 'cover', overlay: '#000000', opacity: 0, ...extra });
 export const themeDefaults = {

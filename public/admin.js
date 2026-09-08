@@ -1,9 +1,11 @@
 import { $, icon, iconButton, installIcons, request, textElement, resourceIcon, busy, showToast, downloadJson, cityPicker } from './ui.js';
-import { backupByteLimit, filterEntries } from './model.js';
+import { backupByteLimit, filterEntries, createClientId, normalizeWebUrl } from './model.js';
 import { createAppearanceEditor } from './appearance.js';
+import { createBulkImportEditor } from './bulk-import.js';
 
 let snapshot, page = 'apps', taxonomyKind = 'categories', editedId, dirty = false, setup = false, pendingBackup, settingsCity, entryDirty = false;
 let sorter;
+let iconFetchController, iconVersion = 0, entrySaving = false, bulkDirty = false;
 const titles = { apps: '应用', bookmarks: '书签', taxonomy: '分类与标签', appearance: '主题与背景', settings: '站点设置', backup: '备份与迁移' };
 const setDirty = value => { dirty = value; };
 const api = async (...args) => { try { return await request(...args); } catch (error) { if (error.status === 401) { document.querySelectorAll('dialog[open]').forEach(x => x.close()); await checkAuth(); } throw error; } };
@@ -20,6 +22,10 @@ function updateCounts() {
   $('#admin-brand').textContent = snapshot.document.settings.siteName;
 }
 const appearance = createAppearanceEditor({ getSnapshot: () => snapshot, save, setDirty, upload });
+const bulkImport = createBulkImportEditor({ getSnapshot: () => snapshot, getType: () => page, save, fetchIcon, setDirty: value => { bulkDirty = value; },
+  reload: async () => { snapshot = await api('/api/public-data'); updateCounts(); renderEntries(); }, onSaved: () => renderEntries(),
+});
+$('#bulk-import').onclick = () => bulkImport.open();
 function confirmAction(title, message) {
   const dialog = $('#confirm-dialog'); $('#confirm-title').textContent = title; $('#confirm-message').textContent = message;
   return new Promise(resolve => {
@@ -49,7 +55,7 @@ window.addEventListener('hashchange', () => {
   if (dirty && !window.confirm('当前修改尚未保存，是否放弃？')) { history.replaceState(null, '', '#' + page); return; }
   navigate();
 });
-window.addEventListener('beforeunload', event => { if (dirty || entryDirty) { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (dirty || entryDirty || bulkDirty) { event.preventDefault(); event.returnValue = ''; } });
 async function checkAuth() {
   const status = await request('/api/auth/status'); setup = status.setupRequired;
   $('#auth-view').hidden = status.authenticated; $('#admin-layout').hidden = !status.authenticated;
@@ -116,6 +122,7 @@ function renderEntries() {
 }
 $('#manage-query').oninput = renderEntries;
 function openEntry(entry) {
+  cancelIconFetch(); $('#entry-icon-status').textContent = '';
   editedId = entry?.id; entryDirty = false;
   $('#entry-title').textContent = (entry ? '编辑' : '添加') + titles[page];
   $('#entry-name').value = entry?.name || ''; $('#entry-description').value = entry?.description || ''; $('#entry-url').value = entry?.url || ''; $('#entry-icon').value = entry?.icon || '';
@@ -127,16 +134,60 @@ function openEntry(entry) {
 }
 $('#add-entry').onclick = () => openEntry();
 $('#entry-form').oninput = () => { entryDirty = true; };
-$('#entry-form').onsubmit = async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true;
+const normalizeEntryUrl = () => ($('#entry-url').value = normalizeWebUrl($('#entry-url').value));
+$('#entry-url').onblur = normalizeEntryUrl;
+function cancelIconFetch() {
+  iconVersion++; iconFetchController?.abort(); iconFetchController = null;
+  $('#fetch-entry-icon').disabled = false; $('#fetch-entry-icon').removeAttribute('aria-busy');
+}
+$('#entry-url').oninput = $('#entry-icon').oninput = () => { cancelIconFetch(); $('#entry-icon-status').textContent = ''; };
+async function fetchIcon(url, signal = AbortSignal.timeout(12_000)) {
+  return (await api('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url }), signal })).url || '';
+}
+$('#fetch-entry-icon').onclick = async () => {
+  const url = normalizeEntryUrl();
+  if (!url) { $('#entry-icon-status').textContent = '请先填写网址。'; return; }
+  cancelIconFetch(); const version = iconVersion, previousIcon = $('#entry-icon').value;
+  const controller = new AbortController(); iconFetchController = controller;
+  const button = $('#fetch-entry-icon'); button.disabled = true; button.setAttribute('aria-busy', 'true');
+  $('#entry-icon-status').textContent = '正在获取图标…';
   try {
-    const doc = structuredClone(snapshot.document), entry = { id: editedId || crypto.randomUUID(), type: page, name: $('#entry-name').value.trim(), description: $('#entry-description').value.trim(), url: $('#entry-url').value.trim(), icon: $('#entry-icon').value.trim(), categoryId: $('#entry-category').value, tagIds: [...document.querySelectorAll('#entry-tags input:checked')].map(x => x.value) };
+    const image = await fetchIcon(url, AbortSignal.any([controller.signal, AbortSignal.timeout(12_000)]));
+    if (version !== iconVersion || !$('#entry-dialog').open || $('#entry-icon').value !== previousIcon) return;
+    if (image) { $('#entry-icon').value = image; entryDirty = true; }
+    $('#entry-icon-status').textContent = image ? '已获取图标，保存后生效。' : '未获取到图标，可上传图标或继续保存。';
+  } catch {
+    if (version === iconVersion && !controller.signal.aborted) $('#entry-icon-status').textContent = '未获取到图标，可上传图标或继续保存。';
+  } finally {
+    if (version === iconVersion) { iconFetchController = null; button.disabled = false; button.removeAttribute('aria-busy'); }
+  }
+};
+$('#entry-form').onsubmit = async event => {
+  event.preventDefault(); if (entrySaving) return;
+  cancelIconFetch(); entrySaving = true; $('#entry-error').textContent = '';
+  const controls = [...$('#entry-form').querySelectorAll('input, select, button')].filter(control => !control.disabled);
+  controls.forEach(control => { control.disabled = true; });
+  try {
+    const revision = snapshot.revision, doc = structuredClone(snapshot.document), entry = { id: editedId || createClientId(), type: page, name: $('#entry-name').value.trim(), description: $('#entry-description').value.trim(), url: normalizeEntryUrl(), icon: $('#entry-icon').value.trim(), categoryId: $('#entry-category').value, tagIds: [...document.querySelectorAll('#entry-tags input:checked')].map(x => x.value) };
+    if (!entry.icon) {
+      $('#entry-icon-status').textContent = '正在获取图标，获取失败仍会保存资源…';
+      try { entry.icon = await fetchIcon(entry.url); } catch {}
+      if (!$('#entry-dialog').open) return;
+      $('#entry-icon').value = entry.icon;
+    }
     const index = doc.entries.findIndex(x => x.id === entry.id); index === -1 ? doc.entries.push(entry) : doc.entries.splice(index, 1, entry);
-    await save({ document: doc, revision: snapshot.revision }); entryDirty = false; $('#entry-dialog').close(); renderEntries(); showToast('资源已保存');
-  } catch (e) { $('#entry-error').textContent = e.message; } finally { button.disabled = false; }
+    await save({ document: doc, revision }); entryDirty = false; $('#entry-dialog').close(); renderEntries(); showToast(entry.icon ? '资源已保存' : '资源已保存，暂未获取到图标');
+  } catch (e) { $('#entry-error').textContent = e.message; } finally { entrySaving = false; controls.forEach(control => { control.disabled = false; }); }
 };
 $('#upload-entry-icon').onclick = () => $('#entry-icon-file').click();
-$('#entry-icon-file').onchange = () => busy($('#upload-entry-icon'), async () => { const file = $('#entry-icon-file').files[0]; if (file) { $('#entry-icon').value = await upload(file); entryDirty = true; } $('#entry-icon-file').value = ''; });
+$('#entry-icon-file').onchange = () => busy($('#upload-entry-icon'), async () => {
+  cancelIconFetch(); const version = iconVersion, file = $('#entry-icon-file').files[0]; $('#entry-icon-file').value = '';
+  if (file) {
+    const image = await upload(file);
+    if (version === iconVersion && $('#entry-dialog').open) { $('#entry-icon').value = image; entryDirty = true; $('#entry-icon-status').textContent = '图标已上传，保存后生效。'; }
+  }
+});
+$('#entry-dialog').addEventListener('close', cancelIconFetch);
 function renderTaxonomies() {
   const label = taxonomyKind === 'categories' ? '分类' : '标签';
   $('#add-taxonomy').replaceChildren(icon('plus'), document.createTextNode('添加' + label));
@@ -161,7 +212,7 @@ $('#add-taxonomy').onclick = () => openTaxonomy();
 $('#taxonomy-form').onsubmit = async event => {
   event.preventDefault(); event.submitter.disabled = true;
   try {
-    const doc = structuredClone(snapshot.document), item = { id: editedId || crypto.randomUUID(), name: $('#taxonomy-name').value.trim() };
+    const doc = structuredClone(snapshot.document), item = { id: editedId || createClientId(), name: $('#taxonomy-name').value.trim() };
     const index = doc[taxonomyKind].findIndex(x => x.id === item.id); index === -1 ? doc[taxonomyKind].push(item) : doc[taxonomyKind].splice(index, 1, item);
     await save({ document: doc, revision: snapshot.revision }); $('#taxonomy-dialog').close(); renderTaxonomies(); showToast('已保存');
   } catch (e) { $('#taxonomy-error').textContent = e.message; } finally { event.submitter.disabled = false; }
@@ -203,6 +254,6 @@ document.querySelectorAll('dialog [data-close]').forEach(button => button.onclic
   const dialog = button.closest('dialog'); if (dialog.id === 'entry-dialog' && entryDirty && !await confirmAction('放弃未保存的资源？', '当前输入尚未保存。')) return;
   entryDirty = false; dialog.close();
 });
-$('#entry-dialog').addEventListener('cancel', async event => { if (entryDirty) { event.preventDefault(); if (await confirmAction('放弃未保存的资源？', '当前输入尚未保存。')) { entryDirty = false; $('#entry-dialog').close(); } } });
+$('#entry-dialog').addEventListener('cancel', async event => { if (entrySaving) { event.preventDefault(); return; } if (entryDirty) { event.preventDefault(); if (await confirmAction('放弃未保存的资源？', '当前输入尚未保存。')) { entryDirty = false; $('#entry-dialog').close(); } } });
 installIcons();
 checkAuth().catch(error => { $('#auth-error').textContent = error.message; });
