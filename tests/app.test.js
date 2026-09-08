@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { createApp } from '../src/app.js';
 import { createWeatherService, isPublicIp } from '../src/weather.js';
+import { declaredIcons } from '../src/favicon.js';
 import { filterEntries, createDefaultDocument, createClientId, normalizeWebUrl } from '../public/model.js';
 import { documentSchema } from '../src/schema.js';
 import { parseImportSource, prepareImport } from '../public/import.js';
@@ -71,20 +72,40 @@ test('favicon endpoint stores a site image as WebP and returns a reusable upload
   assert.ok((await (await call('/api/admin/export')).json()).assets[url]);
 });
 
+test('favicon HTML declarations resolve entities, relative URLs, protocol-relative URLs and manifests', async t => {
+  const png = await sharp({ create: { width: 24, height: 24, channels: 4, background: '#bd8326' } }).png().toBuffer();
+  assert.deepEqual(declaredIcons('<base href="https://cdn.example/assets/"><link rel="icon" href="logo&#x2E;png"><link rel="manifest" href="/site.webmanifest"><link rel="apple-touch-icon" href="//cdn.example/touch.png">', 'https://example.com/'), {
+    links: ['https://cdn.example/assets/logo.png', 'https://cdn.example/touch.png'], manifests: ['https://cdn.example/site.webmanifest'],
+  });
+  const attempts = [];
+  const call = await faviconServer(t, { request: async url => {
+    attempts.push(url.href);
+    if (url.href === 'https://example.com/favicon.ico') return new Response(null, { status: 404 });
+    if (url.href === 'https://example.com/') return new Response('<link rel="icon" href="/missing.png"><link rel="manifest" href="/site.webmanifest">');
+    if (url.href === 'https://example.com/site.webmanifest') return new Response(JSON.stringify({ icons: [{ src: '/manifest-icon.png' }] }));
+    if (url.href === 'https://example.com/manifest-icon.png') return new Response(png, { headers: { 'Content-Type': 'image/png' } });
+    return new Response(null, { status: 404 });
+  } });
+  const result = await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com/path' }) })).json();
+  assert.match(result.url, /^\/uploads\/[a-f0-9-]{36}\.webp$/);
+  assert.deepEqual(attempts.slice(0, 4), ['https://example.com/favicon.ico', 'https://example.com/', 'https://example.com/missing.png', 'https://example.com/site.webmanifest']);
+});
+
 test('favicon providers fall back in order and total failure still permits saving', async t => {
   const png = await sharp({ create: { width: 16, height: 16, channels: 4, background: '#4052ca' } }).png().toBuffer();
-  const sources = ['https://example.com/favicon.ico', 'https://www.google.com/s2/favicons?domain=example.com&sz=64', 'https://icons.duckduckgo.com/ip3/example.com.ico'];
-  for (const winner of [0, 1, 2, 3]) {
+  const sources = ['https://example.com/favicon.ico', 'https://example.com/', 'https://www.google.com/s2/favicons?domain=example.com&sz=64', 'https://icons.duckduckgo.com/ip3/example.com.ico'];
+  for (const winner of [0, 2, 3, 4]) {
     const attempts = [];
     const call = await faviconServer(t, { request: async url => {
       attempts.push(url.href);
       if (url.href === sources[winner]) return new Response(png);
+      if (url.href === sources[1]) return new Response('<html>no icon declarations</html>');
       if (url.hostname === 'example.com') throw Error('network unavailable');
       return new Response('<html>not an icon</html>');
     } });
     const result = await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com/docs' }) })).json();
-    assert.deepEqual(attempts, sources.slice(0, Math.min(winner + 1, 3)));
-    if (winner < 3) assert.match(result.url, /^\/uploads\//);
+    assert.deepEqual(attempts, sources.slice(0, Math.min(winner + 1, 4)));
+    if (winner < 4) assert.match(result.url, /^\/uploads\//);
     else {
       assert.deepEqual(result, { url: '' });
       const current = await (await call('/api/public-data')).json();

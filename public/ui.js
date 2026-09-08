@@ -53,7 +53,9 @@ export function resourceIcon(entry) {
   let host;
   try { host = new URL(entry.url).hostname; } catch { return box; }
   const bundled = { 'github.com': 'github', 'chatgpt.com': 'chatgpt', 'excalidraw.com': 'excalidraw', 'dash.cloudflare.com': 'cloudflare', 'www.notion.so': 'notion', 'notion.so': 'notion', 'www.figma.com': 'figma', 'figma.com': 'figma', 'developer.mozilla.org': 'mdn', 'sspai.com': 'sspai', 'vercel.com': 'vercel', 'www.oschina.net': 'oschina', 'www.bing.com': 'bing', 'www.wikipedia.org': 'wikipedia' };
-  const sources = [...new Set([entry.icon, bundled[host] ? `/assets/${bundled[host]}.png` : '', ...faviconUrls(entry.url)].filter(Boolean))];
+  const serverFavicon = `/api/favicon?url=${encodeURIComponent(entry.url)}`;
+  const providers = faviconUrls(entry.url);
+  const sources = [...new Set([entry.icon, bundled[host] ? `/assets/${bundled[host]}.png` : '', providers[0], serverFavicon, ...providers.slice(1)].filter(Boolean))];
   let index = 0;
   function next() {
     if (index >= sources.length) return;

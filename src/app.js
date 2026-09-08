@@ -52,7 +52,7 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
   const faviconLimit = rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '图标获取较多，请稍后再试；资源仍可保存。' } });
   const authLimit = rateLimit({ windowMs: 15 * 60_000, limit: 12, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: '尝试次数过多，请 15 分钟后重试。' } });
   app.use('/api', apiLimit);
-  app.use('/api/admin/favicon', faviconLimit);
+  app.use(['/api/favicon', '/api/admin/favicon'], faviconLimit);
   function requireAdmin(req, res, next) { if (!database.authenticated(hashToken(sessionToken(req)))) return next(failure('登录已失效，请重新登录。', 401)); next(); }
   function login(req, res) {
     const token = randomBytes(32).toString('hex');
@@ -85,6 +85,14 @@ export async function createApp({ dataDir = process.env.DATA_DIR || path.join(ro
   app.get('/api/cities', async (req, res) => {
     const name = z.string().trim().min(2).max(80).parse(req.query.q);
     try { res.json(await weather.cities(name)); } catch { throw failure('城市查询暂不可用，请稍后重试。', 503); }
+  });
+  app.get('/api/favicon', async (req, res) => {
+    const url = z.string().max(2000).refine(isWebUrl, '网址必须为不含账号密码的 HTTP(S) 地址').parse(req.query.url);
+    try {
+      const bytes = await favicon(url);
+      if (!bytes) return res.sendStatus(404);
+      res.type('image/webp').set('Cache-Control', 'public, max-age=3600').send(bytes);
+    } catch { res.sendStatus(404); }
   });
   app.use('/api/admin', requireAdmin);
   async function verifyImages(document) {
