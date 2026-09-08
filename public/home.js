@@ -3,6 +3,12 @@ import { $, icon, installIcons, request, textElement, applyAppearance, makeResou
 
 let documentData, type = 'apps', searchScope = 'web', activeTag = '', fullIp = '', showIp = false, visitor, weatherSequence = 0;
 const isPreview = new URLSearchParams(location.search).has('preview');
+// The appearance editor embeds the homepage in an iframe. Keep preview interactions
+// inside the frame so a click on the brand cannot navigate away from preview mode.
+if (isPreview) document.addEventListener('click', event => {
+  const link = event.target.closest('a');
+  if (link?.classList.contains('brand')) { event.preventDefault(); event.stopPropagation(); }
+}, true);
 let manualCity;
 try { manualCity = JSON.parse(storageGet('navigation-city')); } catch {}
 if (!manualCity || typeof manualCity.name !== 'string' || !Number.isFinite(manualCity.latitude) || !Number.isFinite(manualCity.longitude)) manualCity = null;
