@@ -9,6 +9,7 @@ import { isWebUrl } from './schema.js';
 import { faviconUrls } from '../public/model.js';
 
 const maxBytes = 2 * 1024 * 1024;
+const maxInputPixels = 4 * 1024 * 1024;
 const maxHtmlBytes = 512 * 1024;
 const maxRedirects = 3;
 const requestTimeout = 3000;
@@ -76,7 +77,7 @@ async function convertFavicon(bytes) {
     const image = decodeIco(single)[0]; bytes = Buffer.from(image.data);
     if (image.type === 'bmp') raw = { width: image.width, height: image.height, channels: 4 };
   }
-  const pipeline = sharp(bytes, { limitInputPixels: 1_048_576, animated: false, ...(raw ? { raw } : {}) });
+  const pipeline = sharp(bytes, { limitInputPixels: maxInputPixels, animated: false, ...(raw ? { raw } : {}) });
   const meta = await pipeline.metadata();
   if (!['png', 'jpeg', 'webp', 'gif', 'raw'].includes(meta.format)) throw Error('Unsupported favicon image');
   return pipeline.rotate().resize({ width: 128, height: 128, fit: 'inside', withoutEnlargement: true }).webp({ quality: 86 }).toBuffer();

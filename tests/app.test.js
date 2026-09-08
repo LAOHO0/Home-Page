@@ -159,6 +159,24 @@ test('favicon redirects recheck DNS and cannot cross into private networks', asy
   assert.deepEqual(attempts, [{ url: 'https://example.com/favicon.ico', address: '93.184.215.14' }]);
 });
 
+test('favicon endpoint accepts large site logos within the pixel budget and shrinks them to WebP', async t => {
+  const png = await sharp({ create: { width: 1254, height: 1254, channels: 4, background: '#3d7bd8' } }).png().toBuffer();
+  assert.ok(png.length < 2 * 1024 * 1024, 'fixture must stay within the 2 MB download limit');
+  const call = await faviconServer(t, { request: async url => new Response(url.href === 'https://example.com/favicon.ico' ? png : null, { status: url.href === 'https://example.com/favicon.ico' ? 200 : 404 }) });
+  const result = await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) })).json();
+  assert.match(result.url, /^\/uploads\/[a-f0-9-]{36}\.webp$/);
+  const meta = await sharp(Buffer.from(await (await call(result.url)).arrayBuffer())).metadata();
+  assert.equal(meta.format, 'webp');
+  assert.ok(meta.width <= 128 && meta.height <= 128, 'stored icon is capped at 128 px');
+});
+
+test('favicon endpoint still rejects images that exceed the decode pixel budget', async t => {
+  const png = await sharp({ create: { width: 2049, height: 2049, channels: 4, background: '#c04a4a' } }).png().toBuffer();
+  assert.ok(png.length < 2 * 1024 * 1024, 'fixture isolates the pixel limit from the byte limit');
+  const call = await faviconServer(t, { request: async () => new Response(png) });
+  assert.deepEqual(await (await call('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url: 'https://example.com' }) })).json(), { url: '' });
+});
+
 test('favicon endpoint rejects oversized and malformed image payloads', async t => {
   for (const body of [Buffer.alloc(2 * 1024 * 1024 + 1), Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"></svg>'), Buffer.from([0, 0, 1, 0, 255, 255])]) {
     const call = await faviconServer(t, { request: async () => new Response(body) });
