@@ -119,3 +119,33 @@ export function filterEntries(document, { type = 'apps', query = '', categoryId 
     return entry.type === type && (!categoryId || entry.categoryId === categoryId) && (!tagId || entry.tagIds.includes(tagId)) && tokens.every(token => text.includes(token));
   });
 }
+
+function exportCell(value) {
+  const raw = String(value ?? '');
+  const text = /^\s*[=+@-]|^[\t\r\n]/.test(raw) ? "'" + raw : raw;
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+function htmlCell(value) {
+  return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+export function exportEntries(document, entries, format = 'json') {
+  const rows = entries.map(entry => ({
+    ...entry,
+    category: document.categories.find(item => item.id === entry.categoryId)?.name || '',
+    tags: document.tags.filter(item => entry.tagIds.includes(item.id)).map(item => item.name),
+  }));
+  if (format === 'json') return JSON.stringify(rows.map(({ category, tags, ...entry }) => ({ ...entry, category, tags })), null, 2);
+  if (format === 'csv') {
+    const fields = ['type', 'name', 'url', 'description', 'category', 'tags', 'icon'];
+    return [fields.join(','), ...rows.map(row => fields.map(field => exportCell(field === 'tags' ? row.tags.join(';') : row[field])).join(','))].join('\n') + '\n';
+  }
+  if (format !== 'html') throw new Error('不支持的导出格式。');
+  const folders = new Map();
+  for (const row of rows) {
+    const folder = row.category || '未分类';
+    if (!folders.has(folder)) folders.set(folder, []);
+    folders.get(folder).push(`<DT><A HREF="${htmlCell(row.url)}"${row.tags.length ? ` TAGS="${htmlCell(row.tags.join(','))}"` : ''}>${htmlCell(row.name)}</A>`);
+  }
+  const body = [...folders].map(([name, links]) => `<DT><H3>${htmlCell(name)}</H3><DL><p>${links.join('')}</DL><p>`).join('');
+  return `<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>${body}</DL><p>\n`;
+}

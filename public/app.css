@@ -166,12 +166,20 @@ dialog { width: min(500px, calc(100% - 32px)); border: 1px solid var(--border); 
 dialog::backdrop { background: #171b287a; }
 .dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 24px; }
-dialog input, dialog select { width: 100%; }
+dialog input, dialog select, dialog textarea { width: 100%; }
 .inline-field { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .inline-field > input { flex: 1; width: 0; }
 #entries-pane .toolbar { flex-wrap: wrap; }
 #entries-pane .input-icon { flex: 1 1 160px; max-width: 360px; }
 .toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.selection-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.entries-toolbar { flex-wrap: wrap; }
+.entries-toolbar .input-icon { flex: 1 1 180px; max-width: 400px; }
+.bulk-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.selection-tools label { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; font-weight: 400; }
+#selection-summary { font-size: 12px; }
+#bulk-delete { color: var(--danger); }
+.export-count { margin: 16px 0 8px; }
 #bulk-dialog { width: min(820px, calc(100% - 32px)); }
 #bulk-source { width: 100%; resize: vertical; }
 .bulk-file-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
@@ -220,7 +228,10 @@ dialog input, dialog select { width: 100%; }
 .input-icon { display: flex; align-items: center; gap: 8px; background: var(--control); border-radius: 6px; padding-left: 12px; width: min(320px, 100%); }
 .input-icon input { width: 100%; border: 0; background: transparent; }
 .input-icon .icon { opacity: .5; }
-.entry-row { display: grid; grid-template-columns: 24px minmax(180px, 1fr) minmax(90px, .4fr) minmax(90px, .5fr) 176px; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.entry-row { display: grid; grid-template-columns: 24px 24px minmax(180px, 1fr) minmax(90px, .4fr) minmax(90px, .5fr) 176px; align-items: center; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.entry-row.is-selected { background: var(--control); }
+.entry-selection { display: flex; align-items: center; min-height: 44px; margin: 0; cursor: pointer; }
+.entry-select { margin: 0; cursor: pointer; }
 .entry-main { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .entry-main .resource-copy b { font-size: 14px; }
 .entry-url { display: block; font-size: 12px; margin-top: 4px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -286,7 +297,7 @@ output { float: right; font-weight: 400; font-size: 12px; color: var(--muted); }
   .weather-icon .icon { width: 28px; height: 28px; flex-basis: 28px; }
   .admin-layout { grid-template-columns: 190px minmax(0, 1fr); }
   .admin-content, .admin-topbar { padding-left: 24px; padding-right: 24px; }
-  .entry-row { grid-template-columns: 20px minmax(100px, 1fr) 90px 176px; }
+  .entry-row { grid-template-columns: 24px 20px minmax(100px, 1fr) 90px 176px; }
   .entry-tags { display: none; }
   .appearance-layout { grid-template-columns: 250px minmax(0, 1fr); gap: 20px; }
 }
@@ -339,9 +350,9 @@ output { float: right; font-weight: 400; font-size: 12px; color: var(--muted); }
   .resource-card { min-height: 88px; }
   .resource-copy b { font-size: 16px; }
   .resource-description { font-size: 13px; }
-  .entry-row { grid-template-columns: 18px minmax(0, 1fr); gap: 8px; }
+  .entry-row { grid-template-columns: 24px 18px minmax(0, 1fr); gap: 8px; }
   .entry-category { display: none; }
-  .entry-row .row-actions { grid-column: 2; justify-content: flex-end; }
+  .entry-row .row-actions { grid-column: 3; justify-content: flex-end; }
   .taxonomy-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
   .taxonomy-row .row-actions { grid-column: 2 / -1; }
   .toolbar { gap: 8px; }

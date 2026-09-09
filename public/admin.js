@@ -1,17 +1,22 @@
-import { $, icon, iconButton, installIcons, request, textElement, resourceIcon, busy, showToast, downloadJson, cityPicker, applyBrand } from './ui.js';
-import { backupByteLimit, filterEntries, createClientId, normalizeWebUrl } from './model.js';
+import { $, icon, iconButton, installIcons, request, textElement, resourceIcon, busy, showToast, downloadJson, downloadText, cityPicker, applyBrand } from './ui.js';
+import { backupByteLimit, createClientId, exportEntries, filterEntries, normalizeWebUrl } from './model.js';
 import { createAppearanceEditor } from './appearance.js';
 import { createBulkImportEditor } from './bulk-import.js';
 
 let snapshot, page = 'apps', taxonomyKind = 'categories', editedId, dirty = false, setup = false, pendingBackup, settingsCity, entryDirty = false;
 let sorter;
+let entriesBusy = false;
 let iconFetchController, iconVersion = 0, entrySaving = false, bulkDirty = false;
+const selectedEntryIds = new Set();
 const titles = { apps: '应用', bookmarks: '书签', taxonomy: '分类与标签', appearance: '主题与背景', settings: '站点设置', backup: '备份与迁移' };
 const setDirty = value => { dirty = value; };
 const api = async (...args) => { try { return await request(...args); } catch (error) { if (error.status === 401) { document.querySelectorAll('dialog[open]').forEach(x => x.close()); await checkAuth(); } throw error; } };
 async function upload(file) {
   if (file.size > 5 * 1024 * 1024) throw Error('图片不能超过 5 MB。');
   const body = new FormData(); body.append('image', file); return (await api('/api/admin/upload', { method: 'POST', body })).url;
+}
+async function fetchIcon(url, signal = AbortSignal.timeout(12_000)) {
+  return (await api('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url }), signal })).url || '';
 }
 async function save(value) {
   const result = await api('/api/admin/document', { method: 'PUT', body: JSON.stringify(value) }); snapshot = result; updateCounts(); return result;
@@ -35,6 +40,7 @@ function confirmAction(title, message) {
   });
 }
 function navigate() {
+  selectedEntryIds.clear();
   page = location.hash.slice(1) in titles ? location.hash.slice(1) : 'apps';
   $('#page-title').textContent = titles[page];
   $('#admin-nav').querySelectorAll('a').forEach(a => { a.dataset.page === page ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'); });
@@ -105,28 +111,111 @@ function initSort(list, kind, disabled = false) {
     try { await reorder(kind, [...list.children].map(x => x.dataset.id)); } catch (e) { showToast(e.message, true); kind === 'entries' ? renderEntries() : renderTaxonomies(); }
   } });
 }
+function visibleEntries() { return filterEntries(snapshot.document, { type: page, query: $('#manage-query').value }); }
+function updateEntrySelection(entries = visibleEntries()) {
+  const visibleIds = new Set(entries.map(entry => entry.id));
+  // Hidden resources must never be included in a bulk operation.
+  for (const id of selectedEntryIds) if (!visibleIds.has(id)) selectedEntryIds.delete(id);
+  const count = selectedEntryIds.size, all = $('#select-all-entries');
+  all.checked = count > 0 && count === entries.length;
+  all.indeterminate = count > 0 && count < entries.length;
+  all.disabled = entriesBusy || !entries.length;
+  $('#invert-selection').disabled = entriesBusy || !entries.length;
+  $('#bulk-transfer').textContent = page === 'apps' ? '转为书签' : '转为应用';
+  $('#bulk-transfer').disabled = $('#bulk-delete').disabled = entriesBusy || !count;
+  $('#bulk-export').disabled = entriesBusy || !snapshot.document.entries.length;
+  $('#selection-summary').textContent = entriesBusy ? '正在保存…' : `已选 ${count} 项 · 当前 ${entries.length} 项`;
+  $('#entry-list').querySelectorAll('.entry-row').forEach(row => {
+    const checked = selectedEntryIds.has(row.dataset.id);
+    row.querySelector('.entry-select').checked = checked; row.classList.toggle('is-selected', checked);
+  });
+}
 function renderEntries() {
-  const entries = filterEntries(snapshot.document, { type: page, query: $('#manage-query').value });
+  const entries = visibleEntries();
   const list = $('#entry-list'); list.replaceChildren();
   for (const entry of entries) {
     const row = textElement('div', '', 'entry-row'); row.dataset.id = entry.id;
+    const selection = textElement('label', '', 'entry-selection'), checkbox = document.createElement('input');
+    checkbox.type = 'checkbox'; checkbox.className = 'entry-select'; checkbox.setAttribute('aria-label', '选择' + entry.name);
+    checkbox.onchange = () => { checkbox.checked ? selectedEntryIds.add(entry.id) : selectedEntryIds.delete(entry.id); updateEntrySelection(); };
+    selection.append(checkbox);
     const main = textElement('div', '', 'entry-main'), copy = textElement('div', '', 'resource-copy');
     copy.append(textElement('b', entry.name), textElement('span', entry.description || entry.url, 'entry-url')); main.append(resourceIcon(entry), copy);
     const category = snapshot.document.categories.find(x => x.id === entry.categoryId)?.name || '未分类';
     const tags = textElement('div', '', 'entry-tags'); snapshot.document.tags.filter(x => entry.tagIds.includes(x.id)).forEach(tag => tags.append(textElement('span', tag.name, 'entry-tag')));
-    row.append(dragHandle(), main, textElement('span', category, 'entry-category'), tags, actionButtons(entry, 'entries', () => openEntry(entry), async () => {
+    row.append(selection, dragHandle(), main, textElement('span', category, 'entry-category'), tags, actionButtons(entry, 'entries', () => openEntry(entry), async () => {
       if (!await confirmAction('删除资源？', `确认删除“${entry.name}”？`)) return;
       const doc = structuredClone(snapshot.document); doc.entries = doc.entries.filter(x => x.id !== entry.id); await save({ document: doc, revision: snapshot.revision }); renderEntries(); showToast('资源已删除');
     })); list.append(row);
   }
   if (!entries.length) list.append(textElement('p', '暂无匹配资源', 'empty'));
+  updateEntrySelection(entries);
   initSort(list, 'entries', !!$('#manage-query').value || !entries.length);
 }
 $('#manage-query').oninput = renderEntries;
+$('#select-all-entries').onchange = event => {
+  for (const entry of visibleEntries()) event.target.checked ? selectedEntryIds.add(entry.id) : selectedEntryIds.delete(entry.id);
+  updateEntrySelection();
+};
+$('#invert-selection').onclick = () => {
+  for (const entry of visibleEntries()) selectedEntryIds.has(entry.id) ? selectedEntryIds.delete(entry.id) : selectedEntryIds.add(entry.id);
+  updateEntrySelection();
+};
+async function changeSelectedEntries(remove = false) {
+  if (entriesBusy) return;
+  const ids = new Set(visibleEntries().filter(entry => selectedEntryIds.has(entry.id)).map(entry => entry.id));
+  if (!ids.size) return;
+  const target = page === 'apps' ? 'bookmarks' : 'apps';
+  const title = remove ? '批量删除资源？' : `转为${titles[target]}？`;
+  const message = remove ? `确认删除已选的 ${ids.size} 个资源？` : `确认将 ${ids.size} 个资源转为${titles[target]}？名称、网址、描述、图标、分类和标签都会保留。`;
+  if (!await confirmAction(title, message)) return;
+  entriesBusy = true; $('#entries-pane').inert = true; $('#entries-pane').setAttribute('aria-busy', 'true'); updateEntrySelection();
+  try {
+    const doc = structuredClone(snapshot.document);
+    doc.entries = remove ? doc.entries.filter(entry => !ids.has(entry.id)) : doc.entries.map(entry => ids.has(entry.id) ? { ...entry, type: target } : entry);
+    await save({ document: doc, revision: snapshot.revision });
+    selectedEntryIds.clear();
+    if (['apps', 'bookmarks'].includes(page)) renderEntries();
+    showToast(remove ? `已删除 ${ids.size} 个资源` : `已将 ${ids.size} 个资源转为${titles[target]}`);
+  } catch (error) { showToast(error.message, true); }
+  finally { entriesBusy = false; $('#entries-pane').inert = false; $('#entries-pane').removeAttribute('aria-busy'); if (snapshot) updateEntrySelection(); }
+}
+$('#bulk-transfer').onclick = () => changeSelectedEntries();
+$('#bulk-delete').onclick = () => changeSelectedEntries(true);
+function entriesForExport(scope) {
+  if (scope === 'all') return snapshot.document.entries;
+  if (scope === 'page') return snapshot.document.entries.filter(entry => entry.type === page);
+  const entries = visibleEntries();
+  return scope === 'selected' ? entries.filter(entry => selectedEntryIds.has(entry.id)) : entries;
+}
+function updateExportCount() {
+  const count = entriesForExport($('#export-scope').value).length;
+  $('#export-count').textContent = `将导出 ${count} 个资源`;
+  $('#export-form button[type="submit"]').disabled = !count;
+}
+$('#bulk-export').onclick = () => {
+  for (const option of $('#export-scope').options) option.disabled = !entriesForExport(option.value).length;
+  $('#export-scope').value = ['selected', 'filtered', 'page', 'all'].find(scope => entriesForExport(scope).length) || 'all';
+  updateExportCount(); $('#export-dialog').showModal();
+};
+$('#export-scope').onchange = updateExportCount;
+$('#export-form').onsubmit = event => {
+  event.preventDefault();
+  const format = $('#export-format').value, scope = $('#export-scope').value, entries = entriesForExport(scope);
+  if (!entries.length) { updateExportCount(); return; }
+  try {
+    const content = exportEntries(snapshot.document, entries, format);
+    const types = { json: 'application/json;charset=utf-8', csv: 'text/csv;charset=utf-8', html: 'text/html;charset=utf-8' };
+    const filename = `navigation-${scope === 'all' ? 'all' : page}-${scope}-${new Date().toISOString().slice(0, 10)}.${format}`;
+    downloadText(format === 'csv' ? '\ufeff' + content : content, filename, types[format]);
+    $('#export-dialog').close(); showToast(`已导出 ${entries.length} 个资源`);
+  } catch (error) { showToast(error.message, true); }
+};
 function openEntry(entry) {
   cancelIconFetch(); $('#entry-icon-status').textContent = '';
   editedId = entry?.id; entryDirty = false;
   $('#entry-title').textContent = (entry ? '编辑' : '添加') + titles[page];
+  $('#entry-type').value = entry?.type || page;
   $('#entry-name').value = entry?.name || ''; $('#entry-description').value = entry?.description || ''; $('#entry-url').value = entry?.url || ''; $('#entry-icon').value = entry?.icon || '';
   $('#entry-category').replaceChildren(new Option('未分类', ''), ...snapshot.document.categories.map(x => new Option(x.name, x.id))); $('#entry-category').value = entry?.categoryId || '';
   $('#entry-tags').replaceChildren(); snapshot.document.tags.forEach(tag => {
@@ -143,9 +232,6 @@ function cancelIconFetch() {
   $('#fetch-entry-icon').disabled = false; $('#fetch-entry-icon').removeAttribute('aria-busy');
 }
 $('#entry-url').oninput = $('#entry-icon').oninput = () => { cancelIconFetch(); $('#entry-icon-status').textContent = ''; };
-async function fetchIcon(url, signal = AbortSignal.timeout(12_000)) {
-  return (await api('/api/admin/favicon', { method: 'POST', body: JSON.stringify({ url }), signal })).url || '';
-}
 $('#fetch-entry-icon').onclick = async () => {
   const url = normalizeEntryUrl();
   if (!url) { $('#entry-icon-status').textContent = '请先填写网址。'; return; }
@@ -166,19 +252,22 @@ $('#fetch-entry-icon').onclick = async () => {
 };
 $('#entry-form').onsubmit = async event => {
   event.preventDefault(); if (entrySaving) return;
-  cancelIconFetch(); entrySaving = true; $('#entry-error').textContent = '';
+  cancelIconFetch(); entrySaving = true; const button = event.submitter; $('#entry-error').textContent = '';
   const controls = [...$('#entry-form').querySelectorAll('input, select, button')].filter(control => !control.disabled);
   controls.forEach(control => { control.disabled = true; });
   try {
-    const revision = snapshot.revision, doc = structuredClone(snapshot.document), entry = { id: editedId || createClientId(), type: page, name: $('#entry-name').value.trim(), description: $('#entry-description').value.trim(), url: normalizeEntryUrl(), icon: $('#entry-icon').value.trim(), categoryId: $('#entry-category').value, tagIds: [...document.querySelectorAll('#entry-tags input:checked')].map(x => x.value) };
-    if (!entry.icon) {
+    const url = normalizeWebUrl($('#entry-url').value); $('#entry-url').value = url; let iconUrl = $('#entry-icon').value.trim();
+    const type = $('#entry-type').value, original = snapshot.document.entries.find(entry => entry.id === editedId);
+    const preserveIcon = original && original.type !== type && original.url === url && original.icon === iconUrl;
+    if (!iconUrl && !preserveIcon) {
       $('#entry-icon-status').textContent = '正在获取图标，获取失败仍会保存资源…';
-      try { entry.icon = await fetchIcon(entry.url); } catch {}
+      try { iconUrl = await fetchIcon(url); } catch {}
       if (!$('#entry-dialog').open) return;
-      $('#entry-icon').value = entry.icon;
+      $('#entry-icon').value = iconUrl;
     }
+    const doc = structuredClone(snapshot.document), entry = { id: editedId || createClientId(), type, name: $('#entry-name').value.trim(), description: $('#entry-description').value.trim(), url, icon: iconUrl, categoryId: $('#entry-category').value, tagIds: [...document.querySelectorAll('#entry-tags input:checked')].map(x => x.value) };
     const index = doc.entries.findIndex(x => x.id === entry.id); index === -1 ? doc.entries.push(entry) : doc.entries.splice(index, 1, entry);
-    await save({ document: doc, revision }); entryDirty = false; $('#entry-dialog').close(); renderEntries(); showToast(entry.icon ? '资源已保存' : '资源已保存，暂未获取到图标');
+    await save({ document: doc, revision: snapshot.revision }); entryDirty = false; $('#entry-dialog').close(); renderEntries(); showToast('资源已保存');
   } catch (e) { $('#entry-error').textContent = e.message; } finally { entrySaving = false; controls.forEach(control => { control.disabled = false; }); }
 };
 $('#upload-entry-icon').onclick = () => $('#entry-icon-file').click();

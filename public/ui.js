@@ -166,6 +166,10 @@ export function downloadJson(value, filename) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+export function downloadText(value, filename, type = 'text/plain;charset=utf-8') {
+  const url = URL.createObjectURL(new Blob([value], { type }));
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 export function cityPicker(onSelect, onAutomatic) {
   const dialog = $('#city-dialog'), form = $('#city-search'), list = $('#city-results'), error = $('#city-error');
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
